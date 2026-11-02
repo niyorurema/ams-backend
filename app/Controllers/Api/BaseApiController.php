@@ -50,24 +50,19 @@ abstract class BaseApiController extends Controller
 
     protected function isSuperAdmin(): bool
     {
+        return (bool) ($this->claims()?->is_super_admin ?? false);
+    }
+
+    protected function canManage(): bool
+    {
         $claims = $this->claims();
         if ($claims === null) {
             return false;
         }
 
-        $user = $this->currentUser();
-        return $user !== null && (int) $user['is_super_admin'] === 1;
-    }
-
-    protected function canManage(): bool
-    {
-        $user = $this->currentUser();
-        if ($user === null) {
-            return false;
-        }
-
-        return (int) $user['is_super_admin'] === 1
-            || in_array((string) $user['role'], ['admin', 'rh'], true);
+        // Le filtre JWT vérifie déjà le rôle et le statut actuels en base.
+        return (bool) ($claims->is_super_admin ?? false)
+            || in_array((string) ($claims->role ?? ''), ['admin', 'rh'], true);
     }
 
     /** Utilisateur courant rechargé depuis la base, donc jamais basé sur un ancien rôle JWT. */
@@ -146,11 +141,11 @@ abstract class BaseApiController extends Controller
     /** Les superviseurs peuvent consulter les réglages de pointage, sans les modifier. */
     protected function canReadAttendanceSettings(): bool
     {
-        $user = $this->currentUser();
+        $claims = $this->claims();
 
-        return $user !== null
-            && ((int) $user['is_super_admin'] === 1
-                || in_array((string) $user['role'], ['admin', 'rh', 'superviseur'], true));
+        return $claims !== null
+            && ((bool) $claims->is_super_admin
+                || in_array((string) $claims->role, ['admin', 'rh', 'superviseur'], true));
     }
 
     /** @return array<string, mixed> */
