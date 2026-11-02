@@ -144,6 +144,13 @@ class UsersController extends BaseApiController
         if (! $this->roleMayBeAssigned((string) $input['role'])) {
             return $this->errorResponse('Vous ne pouvez pas attribuer ce rôle.', 403);
         }
+        $isSuperAdmin = isset($input['is_super_admin']) && filter_var($input['is_super_admin'], FILTER_VALIDATE_BOOLEAN);
+        if ($isSuperAdmin && (string) $input['role'] !== 'admin') {
+            return $this->errorResponse('Un super-administrateur doit avoir le rôle administrateur.', 422);
+        }
+        if ($isSuperAdmin && ! $this->isSuperAdmin()) {
+            return $this->errorResponse('Seul un super-administrateur peut attribuer ce statut.', 403);
+        }
         if (! $this->validateEmploye($input['employe_id'] ?? null, $tenantId)) {
             return $this->errorResponse('L’employé sélectionné est introuvable dans ce tenant.', 422);
         }
@@ -158,7 +165,7 @@ class UsersController extends BaseApiController
             'nom_complet' => trim((string) $input['nom_complet']),
             'telephone' => $this->nullableText($input['telephone'] ?? null),
             'role' => (string) $input['role'],
-            'is_super_admin' => 0,
+            'is_super_admin' => $isSuperAdmin ? 1 : 0,
             'is_active' => 1,
             'auth_source' => 'LOCAL',
         ]);
@@ -196,7 +203,7 @@ class UsersController extends BaseApiController
         }
 
         $input = $this->jsonInput();
-        $allowed = ['email', 'nom_complet', 'telephone', 'role', 'employe_id', 'is_active', 'webauthn_enrollment_approved'];
+        $allowed = ['email', 'nom_complet', 'telephone', 'role', 'employe_id', 'is_active', 'webauthn_enrollment_approved', 'is_super_admin'];
         $data = array_intersect_key($input, array_flip($allowed));
         if ($data === []) {
             return $this->errorResponse('Aucun champ modifiable fourni.', 400);
@@ -204,6 +211,19 @@ class UsersController extends BaseApiController
         $validation = $this->validateUserInput($data, false);
         if ($validation !== null) {
             return $validation;
+        }
+        if (array_key_exists('is_super_admin', $data)) {
+            $isSuperAdmin = filter_var($data['is_super_admin'], FILTER_VALIDATE_BOOLEAN);
+            if (! $this->isSuperAdmin()) {
+                return $this->errorResponse('Seul un super-administrateur peut modifier ce statut.', 403);
+            }
+            if ($isSuperAdmin && array_key_exists('role', $data) && (string) $data['role'] !== 'admin') {
+                return $this->errorResponse('Un super-administrateur doit avoir le rôle administrateur.', 422);
+            }
+            if ($isSuperAdmin && (int) $user['id'] === (int) $this->claims()->sub) {
+                return $this->errorResponse('Vous ne pouvez pas vous auto-attribuer le statut de super-administrateur.', 400);
+            }
+            $data['is_super_admin'] = $isSuperAdmin ? 1 : 0;
         }
         if (array_key_exists('webauthn_enrollment_approved', $data)) {
             if (! $this->isSuperAdmin() && (string) ($this->claims()?->role ?? '') !== 'admin') {
@@ -218,9 +238,9 @@ class UsersController extends BaseApiController
 
         $claims = $this->claims();
         if ((int) $claims->sub === $id
-            && (isset($data['role']) || (isset($data['is_active']) && (int) $data['is_active'] === 0))
+            && (isset($data['role']) || isset($data['is_super_admin']) || (isset($data['is_active']) && (int) $data['is_active'] === 0))
         ) {
-            return $this->errorResponse('Vous ne pouvez pas modifier votre propre rôle ni désactiver votre compte.', 400);
+            return $this->errorResponse('Vous ne pouvez pas modifier votre propre rôle, votre statut de super-admin ni désactiver votre compte.', 400);
         }
         if (isset($data['role']) && ! $this->roleMayBeAssigned((string) $data['role'])) {
             return $this->errorResponse('Vous ne pouvez pas attribuer ce rôle.', 403);
@@ -250,6 +270,9 @@ class UsersController extends BaseApiController
         if (array_key_exists('is_active', $data)) $updates['is_active'] = (int) $data['is_active'];
         if (array_key_exists('webauthn_enrollment_approved', $data)) {
             $updates['webauthn_enrollment_approved'] = (int) $data['webauthn_enrollment_approved'];
+        }
+        if (array_key_exists('is_super_admin', $data)) {
+            $updates['is_super_admin'] = (int) $data['is_super_admin'];
         }
 
         $model->skipValidation(true);
@@ -469,6 +492,11 @@ class UsersController extends BaseApiController
             && ! in_array((string) $input['is_active'], ['0', '1'], true)
         ) {
             return $this->errorResponse('Le statut actif est invalide.', 422);
+        }
+        if (array_key_exists('is_super_admin', $input)
+            && ! in_array((string) $input['is_super_admin'], ['0', '1', 'true', 'false'], true)
+        ) {
+            return $this->errorResponse('Le statut super-administrateur est invalide.', 422);
         }
         if (array_key_exists('employe_id', $input)
             && $input['employe_id'] !== null

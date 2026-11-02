@@ -64,7 +64,7 @@ class TenantConfigController extends BaseApiController
         }
 
         $data = [];
-        foreach (['name', 'slogan', 'primary_color', 'secondary_color', 'font_family', 'font_size', 'logo_url', 'timezone'] as $field) {
+        foreach (['name', 'slogan', 'primary_color', 'secondary_color', 'sidebar_color', 'topbar_color', 'font_family', 'font_size', 'logo_url', 'timezone'] as $field) {
             if (array_key_exists($field, $input)) {
                 $data[$field] = $input[$field];
             }
@@ -499,7 +499,7 @@ class TenantConfigController extends BaseApiController
             && (! is_string($donnees['slogan']) || mb_strlen($donnees['slogan']) > 250)) {
             return false;
         }
-        foreach (['primary_color', 'secondary_color'] as $couleur) {
+        foreach (['primary_color', 'secondary_color', 'sidebar_color', 'topbar_color'] as $couleur) {
             if (isset($donnees[$couleur]) && (! is_string($donnees[$couleur]) || preg_match('/^#[0-9a-fA-F]{6}$/', $donnees[$couleur]) !== 1)) {
                 return false;
             }
@@ -533,6 +533,8 @@ class TenantConfigController extends BaseApiController
             'slogan' => $tenant['slogan'] ?: '',
             'primary_color' => $tenant['primary_color'] ?: '#1f2937',
             'secondary_color' => $tenant['secondary_color'] ?: '#f3f4f6',
+            'sidebar_color' => $tenant['sidebar_color'] ?: '#ffffff',
+            'topbar_color' => $tenant['topbar_color'] ?: '#ffffff',
             'font_family' => $tenant['font_family'] ?: 'Inter',
             'font_size' => $tenant['font_size'] ?: 'normal',
             'timezone' => $tenant['timezone'] ?: 'Africa/Bujumbura',

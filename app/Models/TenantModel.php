@@ -35,6 +35,8 @@ class TenantModel extends Model
         'slogan',
         'primary_color',
         'secondary_color',
+        'sidebar_color',
+        'topbar_color',
         'font_family',
         'font_size',
         'notes',
