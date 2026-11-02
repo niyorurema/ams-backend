@@ -76,9 +76,16 @@ class CapteursController extends BaseApiController
         }
 
         $data = array_intersect_key($input, array_flip([
-            'nom', 'adresse_ip', 'port', 'type_reseau', 'com_key', 'timeout_secondes', 'notes',
+            'nom', 'numero_serie', 'adresse_ip', 'port', 'type_reseau', 'com_key', 'timeout_secondes', 'statut', 'notes',
         ]));
         $data['tenant_id'] = $tenantId;
+        $data['port'] = $data['port'] ?? 4370;
+        $data['type_reseau'] = $data['type_reseau'] ?? 'LAN';
+        $data['statut'] = $data['statut'] ?? 'ACTIF';
+        $data['com_key'] = array_key_exists('com_key', $data) && trim((string) $data['com_key']) !== ''
+            ? (string) $data['com_key']
+            : '0';
+        $data['timeout_secondes'] = $data['timeout_secondes'] ?? 60;
         $model = new CapteurModel();
         if (! $model->insert($data)) {
             return $this->errorResponse(implode(' ', $model->errors()), 422);
@@ -98,7 +105,7 @@ class CapteursController extends BaseApiController
         }
 
         $data = array_intersect_key($this->jsonInput(), array_flip([
-            'nom', 'adresse_ip', 'port', 'type_reseau', 'com_key', 'timeout_secondes', 'notes', 'statut',
+            'nom', 'numero_serie', 'adresse_ip', 'port', 'type_reseau', 'com_key', 'timeout_secondes', 'notes', 'statut',
         ]));
         if ($data === []) {
             return $this->errorResponse('Aucun champ modifiable fourni.', 400);
