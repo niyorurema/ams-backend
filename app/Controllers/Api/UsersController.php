@@ -449,18 +449,6 @@ class UsersController extends BaseApiController
         return $this->successResponse(['changed' => true], 'Mot de passe modifié.');
     }
 
-    private function currentUser(): ?array
-    {
-        $claims = $this->claims();
-        if ($claims === null) {
-            return null;
-        }
-        return (new UserModel())
-            ->where('id', (int) $claims->sub)
-            ->where('tenant_id', (int) $claims->tenant_id)
-            ->first();
-    }
-
     private function validateUserInput(array $input, bool $creating): ?ResponseInterface
     {
         if (array_key_exists('email', $input)) {
