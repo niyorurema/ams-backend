@@ -15,7 +15,7 @@ abstract class BaseApiController extends Controller
     /** @return ?\stdClass */
     protected function claims(): ?\stdClass
     {
-        $authorization = $this->request->getHeaderLine('Authorization');
+        $authorization = $this->request->getServer('HTTP_AUTHORIZATION');//$authorization = $this->request->getHeaderLine('Authorization');
         if (preg_match('/^Bearer\s+(\S+)$/i', trim($authorization), $matches) !== 1) {
             return null;
         }
