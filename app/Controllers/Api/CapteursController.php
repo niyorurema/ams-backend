@@ -110,6 +110,12 @@ class CapteursController extends BaseApiController
         if ($data === []) {
             return $this->errorResponse('Aucun champ modifiable fourni.', 400);
         }
+        if (array_key_exists('com_key', $data)) {
+            $data['com_key'] = trim((string) $data['com_key']) !== '' ? (string) $data['com_key'] : '0';
+        }
+        if (array_key_exists('numero_serie', $data)) {
+            $data['numero_serie'] = trim((string) $data['numero_serie']) !== '' ? trim((string) $data['numero_serie']) : null;
+        }
 
         $model = new CapteurModel();
         if (! $model->update($id, $data)) {
@@ -282,7 +288,7 @@ class CapteursController extends BaseApiController
     private function champsPublics(): array
     {
         return [
-            'id', 'tenant_id', 'nom', 'numero_serie', 'adresse_ip', 'port', 'type_reseau',
+            'id', 'tenant_id', 'nom', 'numero_serie', 'adresse_ip', 'port', 'type_reseau', 'com_key',
             'firmware', 'platform', 'statut', 'dernier_scan', 'derniere_sync_users',
             'derniere_sync_attendance', 'timeout_secondes', 'notes',
         ];
