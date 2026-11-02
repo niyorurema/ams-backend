@@ -12,7 +12,7 @@ $routes->post('iclock/devicecmd', 'IclockController::devicecmd');
 
 $routes->post('api/auth/login', 'Api\\AuthController::login');
 
-$routes->group('api', ['filter' => 'cors'], static function ($routes): void {
+$routes->group('api', ['filter' => ['cors','jwt']], static function ($routes): void {
 	$routes->get('me', 'Api\\UsersController::me');
 	$routes->put('me', 'Api\\UsersController::updateMe');
 	$routes->post('me/change-password', 'Api\\UsersController::changeOwnPassword');
