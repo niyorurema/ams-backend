@@ -51,16 +51,6 @@ class JwtAuthFilter implements FilterInterface
                 ->setJSON(['success' => false, 'data' => null, 'message' => 'Compte utilisateur inactif ou introuvable.']);
         }
 
-        $currentRole = (string) $user['role'];
-        $currentSuperAdmin = (int) $user['is_super_admin'] === 1;
-        $tokenRole = isset($claims->role) ? (string) $claims->role : null;
-        $tokenSuperAdmin = isset($claims->is_super_admin) && (bool) $claims->is_super_admin;
-        if ($tokenRole !== $currentRole || $tokenSuperAdmin !== $currentSuperAdmin) {
-            return Services::response()
-                ->setStatusCode(401)
-                ->setJSON(['success' => false, 'data' => null, 'message' => 'Les droits du compte ont changé. Reconnectez-vous.']);
-        }
-
         $tenant = (new TenantModel())->find((int) $claims->tenant_id);
         if ($tenant === null || (int) $tenant['is_active'] !== 1) {
             return Services::response()
