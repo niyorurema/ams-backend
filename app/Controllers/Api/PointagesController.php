@@ -51,6 +51,14 @@ class PointagesController extends BaseApiController
             ->where('p.tenant_id', $tenantId)
             ->where('p.deleted_at', null);
 
+        $visibleIds = $this->visibleEmployeeIds($dateDebut !== '' ? $dateDebut : $dateFin);
+        if ($visibleIds !== null) {
+            if ($visibleIds === []) {
+                return $this->successResponse(['items' => [], 'pagination' => ['limit' => 10, 'offset' => 0, 'total' => 0]]);
+            }
+            $query->whereIn('COALESCE(e.id, eb.id)', $visibleIds);
+        }
+
         $employeId = $this->request->getGet('employe_id');
         if ($employeId !== null) {
             if (filter_var($employeId, FILTER_VALIDATE_INT) === false
@@ -129,8 +137,16 @@ class PointagesController extends BaseApiController
             ->where('p.tenant_id', $tenantId)
             ->where('p.deleted_at', null)
             ->where('p.date_pointage >=', $dateDebut . ' 00:00:00')
-            ->where('p.date_pointage <=', $dateFin . ' 23:59:59')
-            ->orderBy('p.date_pointage', 'ASC')
+            ->where('p.date_pointage <=', $dateFin . ' 23:59:59');
+
+        $visibleIds = $this->visibleEmployeeIds($dateDebut);
+        if ($visibleIds !== null) {
+            if ($visibleIds === []) {
+                return $this->successResponse((new PointageStatsService())->calculerDepuisCollection([], $dateDebut, $dateFin));
+            }
+            $primedRows = $primedRows->whereIn('COALESCE(e.id, eb.id)', $visibleIds);
+        }
+        $primedRows = $primedRows->orderBy('p.date_pointage', 'ASC')
             ->get()
             ->getResultArray();
 
@@ -160,11 +176,13 @@ class PointagesController extends BaseApiController
         }
 
         try {
+            $visibleIds = $this->visibleEmployeeIds($dateDebut);
             $stats = (new CalculPresenceService())->getStatsPresenceParJour(
                 $tenantId,
                 $dateDebut,
                 $dateFin,
-                $granularite
+                $granularite,
+                $visibleIds
             );
 
             return $this->successResponse($stats);
@@ -435,6 +453,15 @@ class PointagesController extends BaseApiController
             ->where('p.date_pointage >=', $dateDebut . ' 00:00:00')
             ->where('p.date_pointage <=', $dateFin . ' 23:59:59')
             ->orderBy('p.date_pointage', 'ASC');
+
+        $visibleIds = $this->visibleEmployeeIds($dateDebut);
+        if ($visibleIds !== null) {
+            if ($visibleIds === []) {
+                $builder->where('1 = 0');
+            } else {
+                $builder->whereIn('COALESCE(e.id, eb.id)', $visibleIds);
+            }
+        }
 
         if ($employeId !== null) {
             $builder->where('p.employe_id', (int) $employeId);

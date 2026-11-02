@@ -1495,7 +1495,8 @@ class CalculPresenceService
         int $tenantId,
         string $dateDebut,
         string $dateFin,
-        string $granularite = 'jour'
+        string $granularite = 'jour',
+        ?array $employeIdsAutorises = null
     ): array {
         $this->normaliserDate($dateDebut);
         $this->normaliserDate($dateFin);
@@ -1518,13 +1519,18 @@ class CalculPresenceService
             throw new \InvalidArgumentException('La période ne peut pas dépasser 366 jours.');
         }
 
-        $employes = $this->db->table('employes')
+        $employesQuery = $this->db->table('employes')
             ->select('id')
             ->where('tenant_id', $tenantId)
             ->where('actif', 1)
-            ->where('deleted_at', null)
-            ->get()
-            ->getResultArray();
+            ->where('deleted_at', null);
+        if ($employeIdsAutorises !== null) {
+            if ($employeIdsAutorises === []) {
+                return $this->construireStatistiquesPresence([], $dateDebut, $dateFin, $granularite);
+            }
+            $employesQuery->whereIn('id', array_values(array_unique(array_map('intval', $employeIdsAutorises))));
+        }
+        $employes = $employesQuery->get()->getResultArray();
         $employeIds = array_map(static fn (array $employe): int => (int) $employe['id'], $employes);
 
         if ($employeIds === []) {

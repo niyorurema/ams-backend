@@ -287,10 +287,14 @@ class CapteursController extends BaseApiController
     /** @return array<int, string> */
     private function champsPublics(): array
     {
-        return [
-            'id', 'tenant_id', 'nom', 'numero_serie', 'adresse_ip', 'port', 'type_reseau', 'com_key',
+        $champs = [
+            'id', 'tenant_id', 'nom', 'numero_serie', 'adresse_ip', 'port', 'type_reseau',
             'firmware', 'platform', 'statut', 'dernier_scan', 'derniere_sync_users',
             'derniere_sync_attendance', 'timeout_secondes', 'notes',
         ];
+        if ($this->canManage()) {
+            $champs[] = 'com_key';
+        }
+        return $champs;
     }
 }

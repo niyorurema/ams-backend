@@ -28,6 +28,14 @@ class EmployesController extends BaseApiController
         $model = new EmployeModel();
         $model->where('tenant_id', $tenantId);
 
+        $visibleIds = $this->visibleEmployeeIds();
+        if ($visibleIds !== null) {
+            if ($visibleIds === []) {
+                return $this->successResponse(['items' => [], 'total' => 0, 'limit' => 10, 'offset' => 0]);
+            }
+            $model->whereIn('id', $visibleIds);
+        }
+
         $search = trim((string) ($this->request->getGet('search') ?? ''));
         if ($search !== '') {
             $model->groupStart()
@@ -227,6 +235,15 @@ class EmployesController extends BaseApiController
             ->join('unites_organisationnelles u', 'u.id = e.unite_id AND u.tenant_id = e.tenant_id AND u.deleted_at IS NULL', 'left')
             ->where('e.tenant_id', $tenantId)
             ->where('e.deleted_at', null);
+
+        $visibleIds = $this->visibleEmployeeIds();
+        if ($visibleIds !== null) {
+            if ($visibleIds === []) {
+                $query->where('1 = 0');
+            } else {
+                $query->whereIn('e.id', $visibleIds);
+            }
+        }
 
         $search = trim((string) ($this->request->getGet('search') ?? ''));
         if ($search !== '') {
@@ -555,6 +572,11 @@ class EmployesController extends BaseApiController
     {
         $tenantId = $this->tenantId();
         if ($tenantId === null) {
+            return null;
+        }
+
+        $visibleIds = $this->visibleEmployeeIds();
+        if ($visibleIds !== null && ! in_array($id, $visibleIds, true)) {
             return null;
         }
 
