@@ -143,5 +143,7 @@ $routes->group('api', ['filter' => 'jwt'], static function ($routes): void {
 	$routes->put('rapports/planifies/(:num)', 'Api\\RapportsController::modifierPlanifie/$1');
 	$routes->delete('rapports/planifies/(:num)', 'Api\\RapportsController::supprimerPlanifie/$1');
 });
-
+$routes->options('(:any)', static function () {
+    return response()->setStatusCode(204);
+});
 $routes->options('(:any)', static fn () => service('response')->setStatusCode(204));
