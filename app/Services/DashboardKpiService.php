@@ -307,7 +307,7 @@ final class DashboardKpiService
 
         $resultat = [
             'date' => $date,
-            'updated_at' => $maintenant->format(DateTimeInterface::ATOM),
+            'updated_at' => $maintenant->format(\DateTimeInterface::ATOM),
             'comparaison_hier' => $comparaisonHier,
             'employes' => [
                 'total' => $totalEmployes,
