@@ -35,9 +35,16 @@ class AuthController extends BaseApiController
             return $this->errorResponse('tenant_id doit être un entier positif.', 400);
         }
 
+        $ip = $this->request->getIPAddress();
+        $rateLimit = $this->rateLimitStatus($tenantId, $email, $ip);
+        if ($rateLimit !== null) {
+            return $this->errorResponse('Trop de tentatives de connexion. Réessayez dans quelques minutes.', 429)
+                ->setHeader('Retry-After', (string) $rateLimit);
+        }
+
         $service = new AuthService();
         $options = [
-            'ip' => $this->request->getIPAddress(),
+            'ip' => $ip,
             'user_agent' => $this->request->getUserAgent()->getAgentString(),
         ];
 
@@ -52,13 +59,18 @@ class AuthController extends BaseApiController
         }
 
         if (! $resultat['success'] || ! is_array($resultat['user']) || ! is_string($resultat['token'])) {
+            $this->registerFailedLogin($tenantId, $email, $ip);
             return $this->errorResponse($resultat['message'] ?? 'Identifiants invalides.', 401);
         }
 
+        $this->resetFailedLogin($tenantId, $email, $ip);
+
+        $ttl = max(60, min(86400, (int) env('JWT_TTL', 3600)));
+        $secureCookie = filter_var(env('AUTH_COOKIE_SECURE', true), FILTER_VALIDATE_BOOLEAN);
+        $sameSite = trim((string) env('AUTH_COOKIE_SAMESITE', 'None')) ?: 'None';
+        $cookieDomain = trim((string) env('AUTH_COOKIE_DOMAIN', ''));
         $user = $resultat['user'];
-        return $this->successResponse([
-            'access_token' => $resultat['token'],
-            'token_type' => 'Bearer',
+        $response = $this->successResponse([
             'user' => [
                 'id' => (int) $user['id'],
                 'tenant_id' => (int) $user['tenant_id'],
@@ -67,8 +79,72 @@ class AuthController extends BaseApiController
                 'role' => $user['role'],
                 'is_super_admin' => (bool) $user['is_super_admin'],
             ],
-            'expires_in' => max(60, min(86400, (int) env('JWT_TTL', 3600))),
+            'expires_in' => $ttl,
         ], 'Connexion réussie.');
+
+        $response->setCookie(
+            'ams_access_token',
+            (string) $resultat['token'],
+            time() + $ttl,
+            $cookieDomain,
+            '/',
+            '',
+            $secureCookie,
+            true,
+            $sameSite
+        );
+        return $response;
+    }
+
+    public function logout(): ResponseInterface
+    {
+        $cookieDomain = trim((string) env('AUTH_COOKIE_DOMAIN', ''));
+        $secureCookie = filter_var(env('AUTH_COOKIE_SECURE', true), FILTER_VALIDATE_BOOLEAN);
+        $sameSite = trim((string) env('AUTH_COOKIE_SAMESITE', 'None')) ?: 'None';
+        $response = $this->successResponse(null, 'Déconnexion réussie.');
+        $response->setCookie('ams_access_token', '', time() - 3600, $cookieDomain, '/', '', $secureCookie, true, $sameSite);
+        return $response;
+    }
+
+    private function loginRateKeys(?int $tenantId, string $email, string $ip): array
+    {
+        $tenantPart = $tenantId === null ? 'any' : (string) $tenantId;
+        return [
+            'login_ip_' . hash('sha256', $tenantPart . '|' . $ip),
+            'login_account_' . hash('sha256', $tenantPart . '|' . strtolower($email)),
+        ];
+    }
+
+    private function rateLimitStatus(?int $tenantId, string $email, string $ip): ?int
+    {
+        foreach ($this->loginRateKeys($tenantId, $email, $ip) as $key) {
+            $failed = service('cache')->get($key);
+            if (is_array($failed) && (int) ($failed['count'] ?? 0) >= 5) {
+                $retryAfter = max(0, (int) ($failed['until'] ?? time()) - time());
+                if ($retryAfter > 0) return $retryAfter;
+                service('cache')->delete($key);
+            }
+        }
+        return null;
+    }
+
+    private function registerFailedLogin(?int $tenantId, string $email, string $ip): void
+    {
+        foreach ($this->loginRateKeys($tenantId, $email, $ip) as $key) {
+            $failed = service('cache')->get($key);
+            $count = is_array($failed) ? (int) ($failed['count'] ?? 0) + 1 : 1;
+            service('cache')->save($key, [
+                'count' => $count,
+                'until' => time() + (15 * 60),
+            ], 15 * 60);
+        }
+    }
+
+    private function resetFailedLogin(?int $tenantId, string $email, string $ip): void
+    {
+        foreach ($this->loginRateKeys($tenantId, $email, $ip) as $key) {
+            service('cache')->delete($key);
+        }
     }
 
     public function profile(): ResponseInterface

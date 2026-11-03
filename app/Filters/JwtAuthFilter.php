@@ -27,14 +27,20 @@ class JwtAuthFilter implements FilterInterface
         }
 
         $authorization = $request->getHeaderLine('Authorization');
-        if (preg_match('/^Bearer\s+(\S+)$/i', trim($authorization), $matches) !== 1) {
+        $token = null;
+        if (preg_match('/^Bearer\s+(\S+)$/i', trim($authorization), $matches) === 1) {
+            $token = $matches[1];
+        } elseif (is_string($request->getCookie('ams_access_token'))) {
+            $token = $request->getCookie('ams_access_token');
+        }
+        if ($token === null || $token === '') {
             return Services::response()
                 ->setStatusCode(401)
                 ->setJSON(['success' => false, 'data' => null, 'message' => 'Jeton Bearer requis.']);
         }
 
         try {
-            $claims = $tokenService->decodeToken($matches[1]);
+            $claims = $tokenService->decodeToken($token);
         } catch (Throwable $e) {
             return Services::response()
                 ->setStatusCode(401)
@@ -65,6 +71,9 @@ class JwtAuthFilter implements FilterInterface
         }
 
         $tenant = (new TenantModel())->find((int) $claims->tenant_id);
+        $claims->role = (string) $user['role'];
+        $claims->is_super_admin = (bool) $user['is_super_admin'];
+
         if ($tenant === null || (int) $tenant['is_active'] !== 1) {
             return Services::response()
                 ->setStatusCode(401)

@@ -17,16 +17,47 @@ abstract class BaseApiController extends Controller
     /** @return ?\stdClass */
     protected function claims(): ?\stdClass
     {
-        $authorization = $this->request->getServer('HTTP_AUTHORIZATION');//$authorization = $this->request->getHeaderLine('Authorization');
-        if (preg_match('/^Bearer\s+(\S+)$/i', trim($authorization), $matches) !== 1) {
+        $authorization = $this->request->getServer('HTTP_AUTHORIZATION');
+        $token = null;
+        if (preg_match('/^Bearer\s+(\S+)$/i', trim($authorization), $matches) === 1) {
+            $token = $matches[1];
+        } elseif (is_string($this->request->getCookie('ams_access_token'))) {
+            $token = $this->request->getCookie('ams_access_token');
+        }
+        if ($token === null || $token === '') {
             return null;
         }
 
         try {
-            return (new JwtTokenService())->decodeToken($matches[1]);
+            $claims = (new JwtTokenService())->decodeToken($token);
         } catch (Throwable) {
             return null;
         }
+
+        $user = (new UserModel())
+            ->where('id', (int) $claims->sub)
+            ->where('tenant_id', (int) $claims->tenant_id)
+            ->first();
+        if (! is_array($user)
+            || (int) ($user['is_active'] ?? 0) !== 1
+            || ! empty($user['employe_id']) && $this->employeUtilisateurActif((int) $user['employe_id'], (int) $claims->tenant_id) === false
+        ) {
+            return null;
+        }
+
+        $claims->role = (string) $user['role'];
+        $claims->is_super_admin = (bool) $user['is_super_admin'];
+        return $claims;
+    }
+
+    private function employeUtilisateurActif(int $employeId, int $tenantId): bool
+    {
+        return (new \App\Models\EmployeModel())
+            ->where('id', $employeId)
+            ->where('tenant_id', $tenantId)
+            ->where('actif', 1)
+            ->where('deleted_at', null)
+            ->first() !== null;
     }
 
     protected function tenantId(?int $requestedTenantId = null): ?int

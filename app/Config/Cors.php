@@ -36,6 +36,7 @@ class Cors extends BaseConfig
          */
         'allowedOrigins' => [
             'https://ams.obr.gov.bi', 'https://amsbackend.obr.gov.bi',
+            'https://ams-test.obr.gov.bi', 'https://amsbackend-test.obr.gov.bi',
             'http://localhost:3000',
             'http://localhost:3001',
             'http://127.0.0.1:3000',

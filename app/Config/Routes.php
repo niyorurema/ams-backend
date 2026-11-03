@@ -11,6 +11,7 @@ $routes->get('iclock/getrequest', 'IclockController::getrequest');
 $routes->post('iclock/devicecmd', 'IclockController::devicecmd');
 
 $routes->post('api/auth/login', 'Api\\AuthController::login');
+$routes->post('api/auth/logout', 'Api\\AuthController::logout');
 
 $routes->group('api', ['filter' => ['cors','jwt']], static function ($routes): void {
 	$routes->get('me', 'Api\\UsersController::me');

@@ -32,6 +32,11 @@ class IclockController extends Controller
             return $this->textResponse('Missing SN', 400);
         }
 
+        $accessCheck = $this->verifierAccesCapteur($serialNumber);
+        if ($accessCheck !== null) {
+            return $accessCheck;
+        }
+
         log_message('info', 'ADMS cdata SN={serialNumber} method={method} source_ip={sourceIp} options={options} table={table}', [
             'serialNumber' => $serialNumber,
             'method' => $this->request->getMethod(),
@@ -53,6 +58,10 @@ class IclockController extends Controller
     public function getrequest(): ResponseInterface
     {
         $serialNumber = trim((string) $this->request->getGet('SN'));
+        if ($serialNumber !== '') {
+            $accessCheck = $this->verifierAccesCapteur($serialNumber);
+            if ($accessCheck !== null) return $accessCheck;
+        }
         log_message('info', 'ADMS getrequest SN={serialNumber} source_ip={sourceIp}', [
             'serialNumber' => $serialNumber,
             'sourceIp' => $this->request->getIPAddress(),
@@ -67,6 +76,10 @@ class IclockController extends Controller
     public function devicecmd(): ResponseInterface
     {
         $serialNumber = trim((string) $this->request->getGet('SN'));
+        if ($serialNumber !== '') {
+            $accessCheck = $this->verifierAccesCapteur($serialNumber);
+            if ($accessCheck !== null) return $accessCheck;
+        }
         $bodyLength = strlen($this->request->getBody());
 
         log_message('info', 'ADMS devicecmd SN={serialNumber} source_ip={sourceIp} body_bytes={bodyLength}', [
@@ -76,6 +89,51 @@ class IclockController extends Controller
         ]);
 
         return $this->textResponse('OK');
+    }
+
+    private function verifierAccesCapteur(string $serialNumber): ?ResponseInterface
+    {
+        $capteur = (new CapteurModel())->where('numero_serie', $serialNumber)->first();
+        if (! $capteur) {
+            return null;
+        }
+
+        if (filter_var(env('ADMS_ENFORCE_IP', false), FILTER_VALIDATE_BOOLEAN)) {
+            $expectedIp = trim((string) ($capteur['adresse_ip'] ?? ''));
+            if ($expectedIp !== '' && $this->request->getIPAddress() !== $expectedIp) {
+                log_message('warning', 'ADMS IP refusée SN={serialNumber} attendu={expected} reçu={received}', [
+                    'serialNumber' => $serialNumber,
+                    'expected' => $expectedIp,
+                    'received' => $this->request->getIPAddress(),
+                ]);
+                return $this->textResponse('Forbidden', 403);
+            }
+        }
+
+        if (! filter_var(env('ADMS_REQUIRE_SIGNATURE', false), FILTER_VALIDATE_BOOLEAN)) {
+            return null;
+        }
+
+        $secret = trim((string) ($capteur['com_key'] ?? ''));
+        $timestamp = trim($this->request->getHeaderLine('X-AMS-Timestamp'));
+        $signature = trim($this->request->getHeaderLine('X-AMS-Signature'));
+        if ($secret === '' || $secret === '0' || $timestamp === '' || $signature === '') {
+            log_message('warning', 'ADMS signature obligatoire manquante SN={serialNumber}', ['serialNumber' => $serialNumber]);
+            return $this->textResponse('Forbidden', 403);
+        }
+
+        if (! ctype_digit($timestamp) || abs(time() - (int) $timestamp) > 300) {
+            return $this->textResponse('Forbidden', 403);
+        }
+
+        $payload = $timestamp . '.' . $serialNumber . '.' . $this->request->getBody();
+        $expectedSignature = hash_hmac('sha256', $payload, $secret);
+        if (! hash_equals($expectedSignature, strtolower($signature))) {
+            log_message('warning', 'ADMS signature invalide SN={serialNumber}', ['serialNumber' => $serialNumber]);
+            return $this->textResponse('Forbidden', 403);
+        }
+
+        return null;
     }
 
     /**
