@@ -30,6 +30,12 @@ final class DashboardKpiService
         $debutMoisPrecedent = $maintenant->modify('first day of last month')->format('Y-m-d');
         $finMoisPrecedent = $maintenant->modify('last day of last month')->format('Y-m-d');
 
+        $cacheKey = 'dashboard_kpis_' . $tenantId . '_' . $date;
+        $cached = service('cache')->get($cacheKey);
+        if (is_array($cached)) {
+            return $cached;
+        }
+
         $tenant = $this->db->table('tenants')
             ->select('jours_travailles, actif_regles_nouvelles')
             ->where('id', $tenantId)
@@ -269,8 +275,40 @@ final class DashboardKpiService
             $contrats === []
         );
 
-        return [
+        $hier = $maintenant->modify('-1 day')->format('Y-m-d');
+        $comparaisonHier = null;
+        foreach ($evolution as $jourEvolution) {
+            if ((string) $jourEvolution['date'] === $hier) {
+                $comparaisonHier = [
+                    'attendus' => $jourEvolution['total'],
+                    'presents' => $jourEvolution['presents'],
+                    'en_retard' => $jourEvolution['retards'],
+                    'absents' => $jourEvolution['absents'],
+                    'en_cours' => $jourEvolution['en_cours'],
+                ];
+                break;
+            }
+        }
+
+        $pointagesEntrees = (int) $this->db->table('pointages p')
+            ->join('employes e', 'e.id = p.employe_id AND e.tenant_id = p.tenant_id', 'inner')
+            ->where('e.actif', 1)->where('e.deleted_at', null)->where('p.tenant_id', $tenantId)
+            ->where('p.date_pointage >=', $date . ' 00:00:00')
+            ->where('p.date_pointage <=', $date . ' 23:59:59')
+            ->where('p.type_evenement', 'CHECK_IN')->where('p.deleted_at', null)
+            ->countAllResults();
+        $pointagesSorties = (int) $this->db->table('pointages p')
+            ->join('employes e', 'e.id = p.employe_id AND e.tenant_id = p.tenant_id', 'inner')
+            ->where('e.actif', 1)->where('e.deleted_at', null)->where('p.tenant_id', $tenantId)
+            ->where('p.date_pointage >=', $date . ' 00:00:00')
+            ->where('p.date_pointage <=', $date . ' 23:59:59')
+            ->where('p.type_evenement', 'CHECK_OUT')->where('p.deleted_at', null)
+            ->countAllResults();
+
+        $resultat = [
             'date' => $date,
+            'updated_at' => $maintenant->format(DateTimeInterface::ATOM),
+            'comparaison_hier' => $comparaisonHier,
             'employes' => [
                 'total' => $totalEmployes,
                 'attendus_aujourdhui' => $totalAttendus,
@@ -280,7 +318,11 @@ final class DashboardKpiService
                 'en_cours' => $presenceJour['en_cours'],
                 'sans_pointage_depart' => $presenceJour['sans_pointage_depart'],
             ],
-            'pointages' => ['aujourdhui' => $pointagesAujourdhui],
+            'pointages' => [
+                'aujourdhui' => $pointagesAujourdhui,
+                'entrees' => $pointagesEntrees,
+                'sorties' => $pointagesSorties,
+            ],
             'pointages_recents' => $pointagesRecents,
             'capteurs' => [
                 'actifs' => count(array_filter($capteurs, static fn (array $item): bool => $item['statut'] === 'ACTIF')),
@@ -292,6 +334,8 @@ final class DashboardKpiService
             'evolution_presence' => $evolution,
             'shifts' => $shifts,
         ];
+        service('cache')->save($cacheKey, $resultat, 30);
+        return $resultat;
     }
 
     /**

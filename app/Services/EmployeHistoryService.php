@@ -172,6 +172,7 @@ class EmployeHistoryService
         $totaux = [
             'retard_total_minutes' => 0,
             'jours_absence' => 0,
+            'jours_presence' => 0,
             'heures_travaillees_minutes' => 0,
             'jours_anormaux' => 0,
             'pointages_anormaux' => 0,
@@ -187,6 +188,9 @@ class EmployeHistoryService
             $totaux['heures_travaillees_minutes'] += (int) round((float) $calcul['heures_travaillees'] * 60);
             if ($calcul['statut'] === 'ABSENT') {
                 $totaux['jours_absence']++;
+            }
+            if ($calcul['statut'] === 'PRESENT' || (int) round((float) $calcul['heures_travaillees'] * 60) > 0) {
+                $totaux['jours_presence']++;
             }
             if ($calcul['statut'] === 'ANORMAL') {
                 $totaux['jours_anormaux']++;
