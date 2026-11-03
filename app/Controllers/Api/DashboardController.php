@@ -12,6 +12,15 @@ class DashboardController extends BaseApiController
 {
     public function kpis(): ResponseInterface
     {
+        $user = $this->currentUser();
+        if ($user === null) {
+            return $this->errorResponse('Compte inactif ou employé associé inactif.', 403);
+        }
+        $allowedRoles = ['admin', 'rh', 'superviseur', 'chef_service', 'directeur', 'commissaire'];
+        if (! $this->isSuperAdmin() && ! in_array((string) $user['role'], $allowedRoles, true)) {
+            return $this->errorResponse('Vous n’avez pas accès au tableau de bord.', 403);
+        }
+
         $tenantId = $this->tenantId();
         if ($tenantId === null) {
             return $this->authorizationError();

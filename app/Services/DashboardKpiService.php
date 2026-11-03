@@ -252,11 +252,14 @@ final class DashboardKpiService
         );
         $capteurs = $this->chargerCapteurs($tenantId);
         $shifts = $this->chargerShifts($tenantId, $date);
-        $pointagesAujourdhui = (int) $this->db->table('pointages')
-            ->where('tenant_id', $tenantId)
-            ->where('date_pointage >=', $date . ' 00:00:00')
-            ->where('date_pointage <=', $date . ' 23:59:59')
-            ->where('deleted_at', null)
+        $pointagesAujourdhui = (int) $this->db->table('pointages p')
+            ->join('employes e', 'e.id = p.employe_id AND e.tenant_id = p.tenant_id', 'inner')
+            ->where('e.actif', 1)
+            ->where('e.deleted_at', null)
+            ->where('p.tenant_id', $tenantId)
+            ->where('p.date_pointage >=', $date . ' 00:00:00')
+            ->where('p.date_pointage <=', $date . ' 23:59:59')
+            ->where('p.deleted_at', null)
             ->countAllResults();
         $pointagesRecents = $this->chargerPointagesRecents($tenantId);
         $alertes = $this->construireAlertes(
@@ -433,14 +436,17 @@ final class DashboardKpiService
      */
     private function chargerPointagesParJour(int $tenantId, string $debut, string $fin): array
     {
-        $rows = $this->db->table('pointages')
-            ->select('DATE(date_pointage) AS jour, employe_id, statut_calcul', false)
-            ->where('tenant_id', $tenantId)
-            ->where('date_pointage >=', $debut . ' 00:00:00')
-            ->where('date_pointage <=', $fin . ' 23:59:59')
-            ->where('date_pointage >=', '2001-01-01 00:00:00')
-            ->where('deleted_at', null)
-            ->where('employe_id !=', null)
+        $rows = $this->db->table('pointages p')
+            ->select('DATE(p.date_pointage) AS jour, p.employe_id, p.statut_calcul', false)
+            ->join('employes e', 'e.id = p.employe_id AND e.tenant_id = p.tenant_id', 'inner')
+            ->where('e.actif', 1)
+            ->where('e.deleted_at', null)
+            ->where('p.tenant_id', $tenantId)
+            ->where('p.date_pointage >=', $debut . ' 00:00:00')
+            ->where('p.date_pointage <=', $fin . ' 23:59:59')
+            ->where('p.date_pointage >=', '2001-01-01 00:00:00')
+            ->where('p.deleted_at', null)
+            ->where('p.employe_id IS NOT NULL', null, false)
             ->get()
             ->getResultArray();
 
@@ -466,7 +472,7 @@ final class DashboardKpiService
                 'e.matricule AS employe_matricule, p.badge_id, p.date_pointage, ' .
                 'p.type_evenement, p.statut_calcul, p.capteur_id'
             )
-            ->join('employes e', 'e.id = p.employe_id AND e.tenant_id = p.tenant_id AND e.deleted_at IS NULL', 'left')
+            ->join('employes e', 'e.id = p.employe_id AND e.tenant_id = p.tenant_id AND e.deleted_at IS NULL AND e.actif = 1', 'inner')
             ->where('p.tenant_id', $tenantId)
             ->where('p.date_pointage >=', '2001-01-01 00:00:00')
             ->where('p.deleted_at', null)
