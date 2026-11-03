@@ -50,6 +50,19 @@ class JwtAuthFilter implements FilterInterface
                 ->setStatusCode(401)
                 ->setJSON(['success' => false, 'data' => null, 'message' => 'Compte utilisateur inactif ou introuvable.']);
         }
+        if (! empty($user['employe_id'])) {
+            $employee = (new \App\Models\EmployeModel())
+                ->where('id', (int) $user['employe_id'])
+                ->where('tenant_id', (int) $claims->tenant_id)
+                ->where('actif', 1)
+                ->where('deleted_at', null)
+                ->first();
+            if ($employee === null) {
+                return Services::response()
+                    ->setStatusCode(401)
+                    ->setJSON(['success' => false, 'data' => null, 'message' => 'Compte utilisateur lié à un employé inactif ou introuvable.']);
+            }
+        }
 
         $tenant = (new TenantModel())->find((int) $claims->tenant_id);
         if ($tenant === null || (int) $tenant['is_active'] !== 1) {

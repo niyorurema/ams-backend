@@ -18,6 +18,17 @@ final class EmployeAccountService
         $this->db = $db ?? Database::connect();
     }
 
+    public function syncEmployeeStatus(int $employeeId, int $tenantId, int $active): bool
+    {
+        return $this->db->table('users')
+            ->where('tenant_id', $tenantId)
+            ->where('employe_id', $employeeId)
+            ->update([
+                'is_active' => $active === 1 ? 1 : 0,
+                'updated_at' => date('Y-m-d H:i:s'),
+            ]);
+    }
+
     /**
      * @param array<string, mixed> $employe
      */

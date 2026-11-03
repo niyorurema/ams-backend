@@ -130,12 +130,29 @@ class PointagesController extends BaseApiController
         }
 
         $db = Database::connect();
+        $activeEmployeeIds = array_map(
+            'intval',
+            array_column(
+                $db->table('employes')
+                    ->select('id')
+                    ->where('tenant_id', $tenantId)
+                    ->where('actif', 1)
+                    ->where('deleted_at', null)
+                    ->get()->getResultArray(),
+                'id'
+            )
+        );
+        if ($activeEmployeeIds === []) {
+            return $this->successResponse((new PointageStatsService())->calculerDepuisCollection([], $dateDebut, $dateFin));
+        }
+
         $primedRows = $db->table('pointages p')
             ->select('p.date_pointage, p.type_evenement, COALESCE(e.id, eb.id) AS employe_id, p.capteur_id')
             ->join('employes e', 'e.id = p.employe_id AND e.tenant_id = p.tenant_id', 'left')
             ->join('employes eb', 'eb.tenant_id = p.tenant_id AND eb.badge_id = p.badge_id AND eb.deleted_at IS NULL AND e.id IS NULL', 'left')
             ->where('p.tenant_id', $tenantId)
             ->where('p.deleted_at', null)
+            ->whereIn('COALESCE(e.id, eb.id)', $activeEmployeeIds)
             ->where('p.date_pointage >=', $dateDebut . ' 00:00:00')
             ->where('p.date_pointage <=', $dateFin . ' 23:59:59');
 

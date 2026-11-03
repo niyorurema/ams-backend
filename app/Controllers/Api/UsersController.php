@@ -42,6 +42,7 @@ class UsersController extends BaseApiController
                 Database::connect()->table('employes')
                     ->select('id')
                     ->where('tenant_id', $tenantId)
+                    ->where('actif', 1)
                     ->where('deleted_at', null)
                     ->groupStart()
                         ->like('nom', $search)
@@ -86,7 +87,27 @@ class UsersController extends BaseApiController
             if (! in_array((string) $active, ['0', '1'], true)) {
                 return $this->errorResponse('Le filtre actif doit valoir 0 ou 1.', 422);
             }
-            $model->where('is_active', (int) $active);
+            $model->join('employes e', 'e.id = users.employe_id AND e.tenant_id = users.tenant_id', 'left');
+            if ((string) $active === '1') {
+                $model->where('users.is_active', 1)
+                    ->groupStart()
+                        ->where('e.id', null)
+                        ->orGroupStart()
+                            ->where('e.actif', 1)
+                            ->where('e.deleted_at', null)
+                        ->groupEnd()
+                    ->groupEnd();
+            } else {
+                $model->groupStart()
+                    ->where('users.is_active', 0)
+                    ->orGroupStart()
+                        ->where('e.id IS NOT NULL', null, false)
+                        ->groupStart()
+                            ->where('e.actif', 0)
+                            ->orWhere('e.deleted_at IS NOT NULL', null, false)
+                        ->groupEnd()
+                    ->groupEnd();
+            }
         }
 
         $limit = $this->boundedInteger($this->request->getGet('limit'), 10, 1, 100);
@@ -541,6 +562,8 @@ class UsersController extends BaseApiController
         }
         return (new EmployeModel())
             ->where('tenant_id', $tenantId)
+            ->where('actif', 1)
+            ->where('deleted_at', null)
             ->find((int) $id) !== null;
     }
 
@@ -553,7 +576,7 @@ class UsersController extends BaseApiController
         $employees = [];
         if ($employeeIds !== []) {
             $employees = Database::connect()->table('employes e')
-                ->select('e.id, e.nom, e.prenom, e.matricule, e.poste, e.unite_id, u.nom AS unite_nom')
+                ->select('e.id, e.nom, e.prenom, e.matricule, e.poste, e.unite_id, e.actif, u.nom AS unite_nom')
                 ->join('unites_organisationnelles u', 'u.id = e.unite_id AND u.tenant_id = e.tenant_id AND u.deleted_at IS NULL', 'left')
                 ->where('e.tenant_id', $tenantId)
                 ->where('e.deleted_at', null)
@@ -591,7 +614,11 @@ class UsersController extends BaseApiController
             unset($user['password_hash'], $user['ldap_dn']);
             $user['id'] = (int) $user['id'];
             $user['tenant_id'] = (int) $user['tenant_id'];
-            $user['is_active'] = (bool) $user['is_active'];
+            $employeeId = $user['employe_id'] === null ? null : (int) $user['employe_id'];
+            $employee = $byEmployeeId[$employeeId ?? 0] ?? null;
+            $effectiveActive = (bool) $user['is_active']
+                && ($employeeId === null || ($employee !== null && (int) ($employee['actif'] ?? 0) === 1));
+            $user['is_active'] = $effectiveActive;
             $user['is_super_admin'] = (bool) $user['is_super_admin'];
             $user['webauthn_enrollment_approved'] = (bool) $user['webauthn_enrollment_approved'];
             $user['employe_id'] = $user['employe_id'] === null ? null : (int) $user['employe_id'];

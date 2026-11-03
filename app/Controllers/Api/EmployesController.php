@@ -372,6 +372,9 @@ class EmployesController extends BaseApiController
         if (! $model->update($id, array_merge($employe, $data))) {
             return $this->errorResponse(implode(' ', $model->errors()), 422);
         }
+        if (array_key_exists('actif', $data) && (int) $data['actif'] === 0) {
+            (new EmployeAccountService())->syncEmployeeStatus($id, (int) $employe['tenant_id'], 0);
+        }
 
         return $this->successResponse($this->trouverEmploye($id), 'Employé mis à jour.');
     }
@@ -394,6 +397,7 @@ class EmployesController extends BaseApiController
             }
 
             (new EmployeModel())->delete($id);
+            (new EmployeAccountService())->syncEmployeeStatus($id, (int) $employe['tenant_id'], 0);
             return $this->successResponse(null, 'Employé supprimé et affectations désactivées.');
         } catch (Throwable $e) {
             log_message('error', 'Suppression employé #{id} impossible : {error}', ['id' => $id, 'error' => $e->getMessage()]);
@@ -473,7 +477,8 @@ class EmployesController extends BaseApiController
         if (! $this->canManage()) {
             return $this->errorResponse('Droits d’administration requis.', 403);
         }
-        if ($this->trouverEmploye($id) === null) {
+        $employe = $this->trouverEmploye($id);
+        if ($employe === null) {
             return $this->errorResponse('Employé introuvable.', 404);
         }
 
@@ -486,6 +491,7 @@ class EmployesController extends BaseApiController
             }
 
             (new EmployeModel())->update($id, ['actif' => 0]);
+            (new EmployeAccountService())->syncEmployeeStatus($id, (int) $employe['tenant_id'], 0);
             return $this->successResponse($resultat, 'Employé désactivé.');
         } catch (Throwable $e) {
             log_message('error', 'Désactivation employé #{id} impossible : {error}', ['id' => $id, 'error' => $e->getMessage()]);

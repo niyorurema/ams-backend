@@ -93,6 +93,17 @@ abstract class BaseApiController extends Controller
             ->first();
 
         if ($user !== null) {
+            if (! empty($user['employe_id'])) {
+                $employee = (new \App\Models\EmployeModel())
+                    ->where('id', (int) $user['employe_id'])
+                    ->where('tenant_id', (int) $claims->tenant_id)
+                    ->where('actif', 1)
+                    ->where('deleted_at', null)
+                    ->first();
+                if ($employee === null) {
+                    return null;
+                }
+            }
             return $user;
         }
 
