@@ -39,6 +39,15 @@ final class PointagesRecalculationControllerTest extends CIUnitTestCase
         $this->assertSame(403, $this->controller('superviseur')->recalculerJournee()->getStatusCode());
     }
 
+    public function testRecalculMasseRefusePlusDeCentPointages(): void
+    {
+        $this->setJsonInput(['pointage_ids' => range(1, 101)]);
+
+        $response = $this->controller('rh')->recalculerMasse();
+
+        $this->assertSame(422, $response->getStatusCode());
+    }
+
     public function testRecalculTenantEstLimiteAuTenantDuJeton(): void
     {
         $autreTenantId = $this->creerTenant();

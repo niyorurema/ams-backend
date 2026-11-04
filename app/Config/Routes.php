@@ -95,6 +95,7 @@ $routes->group('api', ['filter' => ['cors','jwt']], static function ($routes): v
 	$routes->post('pointages', 'Api\\PointagesController::create');
 	$routes->post('pointages/journee/comparer-regles', 'Api\\PointagesController::comparerReglesJournee');
 	$routes->post('pointages/journee/recalculer', 'Api\\PointagesController::recalculerJournee');
+	$routes->post('pointages/recalculer-masse', 'Api\\PointagesController::recalculerMasse');
 	$routes->post('pointages/(:num)/recalculer', 'Api\\PointagesController::recalculer/$1');
 	$routes->get('pointages/stats', 'Api\PointagesController::stats');
 	$routes->get('pointages/stats/presence', 'Api\PointagesController::statsPresence');

@@ -45,12 +45,12 @@ final class PointageStatsService
 
             $employeId = $pointage['employe_id'] ?? null;
             if ($employeId !== null && $employeId !== '' && (int) $employeId > 0) {
-                $employes[(int) $employeId] = true;
+                $employes[(int) ($pointage['tenant_id'] ?? 0) . ':' . (int) $employeId] = true;
             }
 
             $capteurId = $pointage['capteur_id'] ?? null;
             if ($capteurId !== null && $capteurId !== '' && (int) $capteurId > 0) {
-                $capteurs[(int) $capteurId] = true;
+                $capteurs[(int) ($pointage['tenant_id'] ?? 0) . ':' . (int) $capteurId] = true;
             }
         }
 

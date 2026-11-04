@@ -20,7 +20,14 @@ class EmployesController extends BaseApiController
 {
     public function index(): ResponseInterface
     {
-        $tenantId = $this->tenantId();
+        $requestedTenantId = $this->request->getGet('tenant_id');
+        $requestedTenantId = $requestedTenantId === null || $requestedTenantId === ''
+            ? null
+            : filter_var($requestedTenantId, FILTER_VALIDATE_INT);
+        if ($requestedTenantId === false || $requestedTenantId !== null && $requestedTenantId < 1) {
+            return $this->errorResponse('Identifiant tenant invalide.', 400);
+        }
+        $tenantId = $this->tenantId($requestedTenantId);
         if ($tenantId === null) {
             return $this->authorizationError();
         }

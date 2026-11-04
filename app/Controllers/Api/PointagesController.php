@@ -28,8 +28,8 @@ class PointagesController extends BaseApiController
 {
     public function index(): ResponseInterface
     {
-        $tenantId = $this->tenantId();
-        if ($tenantId === null) {
+        $tenantId = $this->requestedPointagesTenant();
+        if ($tenantId === false) {
             return $this->authorizationError();
         }
 
@@ -48,8 +48,28 @@ class PointagesController extends BaseApiController
             ->join('employes eb', 'eb.tenant_id = p.tenant_id AND eb.badge_id = p.badge_id AND eb.deleted_at IS NULL AND e.id IS NULL', 'left')
             ->join('unites_organisationnelles u', 'u.id = COALESCE(e.unite_id, eb.unite_id) AND u.tenant_id = p.tenant_id AND u.deleted_at IS NULL', 'left')
             ->join('capteurs c', 'c.id = p.capteur_id', 'left')
-            ->where('p.tenant_id', $tenantId)
+            ->join('tenants t', 't.id = p.tenant_id', 'left')
+            ->select('t.name AS tenant_name')
             ->where('p.deleted_at', null);
+        if ($tenantId !== null) {
+            $query->where('p.tenant_id', $tenantId);
+        }
+
+        $search = trim((string) $this->request->getGet('search'));
+        if (mb_strlen($search) > 100) {
+            return $this->errorResponse('La recherche est trop longue.', 400);
+        }
+        if ($search !== '') {
+            $query->groupStart()
+                ->like('e.nom', $search)
+                ->orLike('e.prenom', $search)
+                ->orLike('e.matricule', $search)
+                ->orLike('eb.nom', $search)
+                ->orLike('eb.prenom', $search)
+                ->orLike('eb.matricule', $search)
+                ->orLike('c.nom', $search)
+                ->groupEnd();
+        }
 
         $visibleIds = $this->visibleEmployeeIds($dateDebut !== '' ? $dateDebut : $dateFin);
         if ($visibleIds !== null) {
@@ -61,12 +81,13 @@ class PointagesController extends BaseApiController
 
         $employeId = $this->request->getGet('employe_id');
         if ($employeId !== null) {
-            if (filter_var($employeId, FILTER_VALIDATE_INT) === false
-                || ! $this->employeAppartientAuTenant((int) $employeId, $tenantId)
-            ) {
+            if (filter_var($employeId, FILTER_VALIDATE_INT) === false || (int) $employeId < 1) {
                 return $this->errorResponse('Employé introuvable pour ce tenant.', 404);
             }
-            $query->where('p.employe_id', (int) $employeId);
+            if ($tenantId !== null && ! $this->employeAppartientAuTenant((int) $employeId, $tenantId)) {
+                return $this->errorResponse('Employé introuvable pour ce tenant.', 404);
+            }
+            $query->where('COALESCE(e.id, eb.id)', (int) $employeId);
         }
 
         $capteurId = $this->request->getGet('capteur_id');
@@ -100,10 +121,30 @@ class PointagesController extends BaseApiController
             $query->where('p.statut', $statut);
         }
 
+        $sortColumns = [
+            'date_pointage' => 'p.date_pointage',
+            'employe' => 'employe_nom',
+            'type_evenement' => 'p.type_evenement',
+            'statut_calcul' => 'p.statut_calcul',
+            'capteur' => 'capteur_nom',
+            'source' => 'p.source',
+            'statut' => 'p.statut',
+        ];
+        $sortBy = (string) ($this->request->getGet('sort_by') ?? 'date_pointage');
+        if (! array_key_exists($sortBy, $sortColumns)) {
+            return $this->errorResponse('Colonne de tri invalide.', 400);
+        }
+        $sortDirection = strtoupper((string) ($this->request->getGet('sort_dir') ?? 'DESC'));
+        if (! in_array($sortDirection, ['ASC', 'DESC'], true)) {
+            return $this->errorResponse('Sens de tri invalide.', 400);
+        }
+
         $limit = min(1000, max(1, (int) ($this->request->getGet('limit') ?? 10)));
         $offset = max(0, (int) ($this->request->getGet('offset') ?? 0));
         $total = (clone $query)->countAllResults();
-        $items = $query->orderBy('p.date_pointage', 'DESC')->limit($limit, $offset)->get()->getResultArray();
+        $items = $query->orderBy($sortColumns[$sortBy], $sortDirection)
+            ->orderBy('p.id', 'DESC')
+            ->limit($limit, $offset)->get()->getResultArray();
 
         return $this->successResponse([
             'items' => $items,
@@ -113,8 +154,8 @@ class PointagesController extends BaseApiController
 
     public function stats(): ResponseInterface
     {
-        $tenantId = $this->tenantId();
-        if ($tenantId === null) {
+        $tenantId = $this->requestedPointagesTenant();
+        if ($tenantId === false) {
             return $this->authorizationError();
         }
 
@@ -130,15 +171,17 @@ class PointagesController extends BaseApiController
         }
 
         $db = Database::connect();
+        $activeEmployeesQuery = $db->table('employes')
+            ->select('id')
+            ->where('actif', 1)
+            ->where('deleted_at', null);
+        if ($tenantId !== null) {
+            $activeEmployeesQuery->where('tenant_id', $tenantId);
+        }
         $activeEmployeeIds = array_map(
             'intval',
             array_column(
-                $db->table('employes')
-                    ->select('id')
-                    ->where('tenant_id', $tenantId)
-                    ->where('actif', 1)
-                    ->where('deleted_at', null)
-                    ->get()->getResultArray(),
+                $activeEmployeesQuery->get()->getResultArray(),
                 'id'
             )
         );
@@ -147,14 +190,14 @@ class PointagesController extends BaseApiController
         }
 
         $primedRows = $db->table('pointages p')
-            ->select('p.date_pointage, p.type_evenement, COALESCE(e.id, eb.id) AS employe_id, p.capteur_id')
+            ->select('p.tenant_id, p.date_pointage, p.type_evenement, COALESCE(e.id, eb.id) AS employe_id, p.capteur_id')
             ->join('employes e', 'e.id = p.employe_id AND e.tenant_id = p.tenant_id', 'left')
             ->join('employes eb', 'eb.tenant_id = p.tenant_id AND eb.badge_id = p.badge_id AND eb.deleted_at IS NULL AND e.id IS NULL', 'left')
-            ->where('p.tenant_id', $tenantId)
             ->where('p.deleted_at', null)
             ->whereIn('COALESCE(e.id, eb.id)', $activeEmployeeIds)
             ->where('p.date_pointage >=', $dateDebut . ' 00:00:00')
             ->where('p.date_pointage <=', $dateFin . ' 23:59:59');
+        if ($tenantId !== null) $primedRows->where('p.tenant_id', $tenantId);
 
         $visibleIds = $this->visibleEmployeeIds($dateDebut);
         if ($visibleIds !== null) {
@@ -174,8 +217,8 @@ class PointagesController extends BaseApiController
 
     public function statsPresence(): ResponseInterface
     {
-        $tenantId = $this->tenantId();
-        if ($tenantId === null) {
+        $tenantId = $this->requestedPointagesTenant();
+        if ($tenantId === false) {
             return $this->authorizationError();
         }
 
@@ -424,8 +467,8 @@ class PointagesController extends BaseApiController
 
     public function export(): ResponseInterface
     {
-        $tenantId = $this->tenantId();
-        if ($tenantId === null) {
+        $tenantId = $this->requestedPointagesTenant();
+        if ($tenantId === false) {
             return $this->authorizationError();
         }
 
@@ -458,18 +501,41 @@ class PointagesController extends BaseApiController
         if ($typeEvenement !== null && ! in_array($typeEvenement, ['CHECK_IN', 'CHECK_OUT', 'BREAK_IN', 'BREAK_OUT', 'UNKNOWN'], true)) {
             return $this->errorResponse('Type de pointage invalide.', 400);
         }
+        $statut = $this->request->getGet('statut');
+        if ($statut !== null && ! in_array($statut, ['VALIDE', 'INVALIDE', 'REJETE', 'SUPPRIME'], true)) {
+            return $this->errorResponse('Statut de pointage invalide.', 400);
+        }
+        $search = trim((string) $this->request->getGet('search'));
+        if (mb_strlen($search) > 100) {
+            return $this->errorResponse('La recherche est trop longue.', 400);
+        }
 
         $db = Database::connect();
         $builder = $db->table('pointages p')
-            ->select("DATE(p.date_pointage) AS date_pointage, TIME(p.date_pointage) AS heure_pointage, CONCAT(COALESCE(e.nom, eb.nom, ''), ' ', COALESCE(e.prenom, eb.prenom, '')) AS employe, COALESCE(e.matricule, eb.matricule) AS matricule, p.type_evenement AS type_evenement, p.statut_calcul AS statut_calcul, c.nom AS capteur_nom, p.source AS source")
+            ->select("DATE(p.date_pointage) AS date_pointage, TIME(p.date_pointage) AS heure_pointage, t.name AS tenant_name, CONCAT(COALESCE(e.nom, eb.nom, ''), ' ', COALESCE(e.prenom, eb.prenom, '')) AS employe, COALESCE(e.matricule, eb.matricule) AS matricule, p.type_evenement AS type_evenement, p.statut_calcul AS statut_calcul, p.statut AS statut, c.nom AS capteur_nom, p.source AS source")
             ->join('employes e', 'e.id = p.employe_id AND e.tenant_id = p.tenant_id', 'left')
             ->join('employes eb', 'eb.tenant_id = p.tenant_id AND eb.badge_id = p.badge_id AND eb.deleted_at IS NULL AND e.id IS NULL', 'left')
             ->join('capteurs c', 'c.id = p.capteur_id', 'left')
-            ->where('p.tenant_id', $tenantId)
+            ->join('tenants t', 't.id = p.tenant_id', 'left')
             ->where('p.deleted_at', null)
             ->where('p.date_pointage >=', $dateDebut . ' 00:00:00')
             ->where('p.date_pointage <=', $dateFin . ' 23:59:59')
             ->orderBy('p.date_pointage', 'ASC');
+        if ($tenantId !== null) {
+            $builder->where('p.tenant_id', $tenantId);
+        }
+
+        if ($search !== '') {
+            $builder->groupStart()
+                ->like('e.nom', $search)
+                ->orLike('e.prenom', $search)
+                ->orLike('e.matricule', $search)
+                ->orLike('eb.nom', $search)
+                ->orLike('eb.prenom', $search)
+                ->orLike('eb.matricule', $search)
+                ->orLike('c.nom', $search)
+                ->groupEnd();
+        }
 
         $visibleIds = $this->visibleEmployeeIds($dateDebut);
         if ($visibleIds !== null) {
@@ -481,13 +547,16 @@ class PointagesController extends BaseApiController
         }
 
         if ($employeId !== null) {
-            $builder->where('p.employe_id', (int) $employeId);
+            $builder->where('COALESCE(e.id, eb.id)', (int) $employeId);
         }
         if ($capteurId !== null) {
             $builder->where('p.capteur_id', (int) $capteurId);
         }
         if ($typeEvenement !== null) {
             $builder->where('p.type_evenement', $typeEvenement);
+        }
+        if ($statut !== null) {
+            $builder->where('p.statut', $statut);
         }
 
         if ($format === 'excel') {
@@ -500,7 +569,7 @@ class PointagesController extends BaseApiController
             return $this->errorResponse('Impossible de préparer le fichier CSV.', 500);
         }
         fwrite($output, chr(0xEF) . chr(0xBB) . chr(0xBF));
-        fputcsv($output, ['Date', 'Heure', 'Employé', 'Matricule', 'Type', 'Statut calculé', 'Capteur', 'Source']);
+        fputcsv($output, ['Date', 'Heure', 'Tenant', 'Employé', 'Matricule', 'Type', 'Statut calculé', 'Statut', 'Capteur', 'Source']);
 
         $pageSize = 1000;
         $offset = 0;
@@ -515,10 +584,12 @@ class PointagesController extends BaseApiController
                 fputcsv($output, [
                     (string) ($row['date_pointage'] ?? ''),
                     (string) ($row['heure_pointage'] ?? ''),
+                    (string) ($row['tenant_name'] ?? ''),
                     trim((string) ($row['employe'] ?? '')),
                     (string) ($row['matricule'] ?? ''),
                     (string) ($row['type_evenement'] ?? ''),
                     (string) ($row['statut_calcul'] ?? ''),
+                    (string) ($row['statut'] ?? ''),
                     (string) ($row['capteur_nom'] ?? ''),
                     (string) ($row['source'] ?? ''),
                 ]);
@@ -788,13 +859,13 @@ class PointagesController extends BaseApiController
         $classeur = new Spreadsheet();
         $feuille = $classeur->getActiveSheet();
         $feuille->setTitle('Pointages');
-        $entetes = ['Date', 'Heure', 'Employé', 'Matricule', 'Type', 'Statut calculé', 'Capteur', 'Source'];
+        $entetes = ['Date', 'Heure', 'Employé', 'Matricule', 'Type', 'Statut calculé', 'Statut', 'Capteur', 'Source'];
         foreach ($entetes as $index => $entete) {
             $feuille->setCellValueExplicit([$index + 1, 1], $entete, DataType::TYPE_STRING);
         }
-        $feuille->getStyle('A1:H1')->getFont()->setBold(true);
+        $feuille->getStyle('A1:I1')->getFont()->setBold(true);
         $feuille->freezePane('A2');
-        $feuille->setAutoFilter('A1:H1');
+        $feuille->setAutoFilter('A1:I1');
 
         $ligneExcel = 2;
         $offset = 0;
@@ -809,6 +880,7 @@ class PointagesController extends BaseApiController
                     (string) ($ligne['matricule'] ?? ''),
                     (string) ($ligne['type_evenement'] ?? ''),
                     (string) ($ligne['statut_calcul'] ?? ''),
+                    (string) ($ligne['statut'] ?? ''),
                     (string) ($ligne['capteur_nom'] ?? ''),
                     (string) ($ligne['source'] ?? ''),
                 ];
@@ -820,7 +892,7 @@ class PointagesController extends BaseApiController
             $offset += $taillePage;
         } while (count($lignes) === $taillePage);
 
-        foreach (range('A', 'H') as $colonne) {
+        foreach (range('A', 'I') as $colonne) {
             $feuille->getColumnDimension($colonne)->setAutoSize(true);
         }
 
@@ -857,103 +929,26 @@ class PointagesController extends BaseApiController
      */
     public function recalculer(int $id): ResponseInterface
     {
-        $tenantId = $this->tenantId();
-        if ($tenantId === null) {
+        $tenantId = $this->requestedPointagesTenant();
+        if ($tenantId === false) {
             return $this->authorizationError();
         }
 
         $db = Database::connect();
-        $pointage = $db->table('pointages p')
-            ->select('p.id, p.tenant_id, p.employe_id, p.badge_id, p.date_pointage, p.type_evenement, p.statut_calcul, COALESCE(e.id, eb.id) AS employe_resolu_id')
-            ->join('employes e', 'e.id = p.employe_id AND e.tenant_id = p.tenant_id AND e.deleted_at IS NULL', 'left')
-            ->join('employes eb', 'eb.tenant_id = p.tenant_id AND eb.badge_id = p.badge_id AND eb.deleted_at IS NULL AND e.id IS NULL', 'left')
-            ->where('p.id', $id)
-            ->where('p.tenant_id', $tenantId)
-            ->where('p.deleted_at', null)
-            ->get()
-            ->getRowArray();
+        $pointageQuery = $this->pointageRecalculQuery($db)->where('p.id', $id);
+        if ($tenantId !== null) {
+            $pointageQuery->where('p.tenant_id', $tenantId);
+        }
+        $pointage = $pointageQuery->get()->getRowArray();
         if ($pointage === null) {
             return $this->errorResponse('Pointage introuvable pour ce tenant.', 404);
         }
 
+        if (! $this->verifierVisibilitePointage($pointage)) {
+            return $this->errorResponse('Pointage hors de votre périmètre.', 403);
+        }
         try {
-            $jour = (new DateTimeImmutable((string) $pointage['date_pointage']))->format('Y-m-d');
-            $employeId = (int) ($pointage['employe_resolu_id'] ?? 0);
-            $requeteJour = $db->table('pointages')
-                ->select('id, employe_id, badge_id, date_pointage, type_evenement, statut_calcul')
-                ->where('tenant_id', $tenantId)
-                ->where('deleted_at', null)
-                ->where('date_pointage >=', $jour . ' 00:00:00')
-                ->where('date_pointage <=', $jour . ' 23:59:59');
-            if ($employeId > 0) {
-                $requeteJour->groupStart()
-                    ->where('employe_id', $employeId)
-                    ->orGroupStart()
-                    ->where('employe_id', null)
-                    ->where('badge_id', (int) $pointage['badge_id'])
-                    ->groupEnd()
-                    ->groupEnd();
-            } else {
-                $requeteJour->where('badge_id', (int) $pointage['badge_id']);
-            }
-            $pointagesJour = $requeteJour
-                ->orderBy('date_pointage', 'ASC')
-                ->orderBy('id', 'ASC')
-                ->get()
-                ->getResultArray();
-
-            $horaire = $employeId > 0
-                ? (new HoraireService($db))->getHoraireEmploye($employeId, $jour)
-                : [];
-            if ($horaire === []) {
-                $horaire = $db->table('tenant_horaires')
-                    ->where('tenant_id', $tenantId)
-                    ->where('est_defaut', 1)
-                    ->where('actif', 1)
-                    ->where('deleted_at', null)
-                    ->orderBy('id', 'ASC')
-                    ->get()
-                    ->getRowArray() ?? [];
-            }
-            $plages = $horaire['plages_horaires'] ?? [];
-            if (is_string($plages)) {
-                $plages = json_decode($plages, true);
-            }
-            if (! is_array($plages)) {
-                $plages = [];
-            }
-
-            $resultats = (new PointageTypeService())->determinerTypesEtStatuts($pointagesJour, $plages);
-            $position = null;
-            $pointageRecalcule = null;
-            foreach ($resultats as $index => $resultat) {
-                if ((int) $resultat['id'] === $id) {
-                    $position = $index + 1;
-                    $pointageRecalcule = $resultat;
-                    break;
-                }
-            }
-            if ($pointageRecalcule === null) {
-                return $this->errorResponse('Le pointage n’a pas pu être recalculé.', 500);
-            }
-
-            return $this->successResponse([
-                'pointage_avant' => [
-                    'type_evenement' => $pointage['type_evenement'],
-                    'statut_calcul' => $pointage['statut_calcul'],
-                ],
-                'pointage_apres' => [
-                    'type_evenement' => $pointageRecalcule['type_evenement'],
-                    'statut_calcul' => $pointageRecalcule['statut_calcul'],
-                ],
-                'contexte' => [
-                    'date' => $jour,
-                    'nb_pointages_jour' => count($pointagesJour),
-                    'position' => $position,
-                    'horaire' => $horaire['nom'] ?? 'Standard',
-                    'plages' => $plages,
-                ],
-            ]);
+            return $this->successResponse($this->calculerPointageRecalcul($pointage, $db));
         } catch (Throwable $exception) {
             log_message('error', 'Recalcul consultatif du pointage #{id} impossible : {message}', [
                 'id' => $id,
@@ -961,6 +956,152 @@ class PointagesController extends BaseApiController
             ]);
             return $this->errorResponse('Impossible de recalculer ce pointage.', 500);
         }
+    }
+
+    /** Simule en lot le recalcul des pointages sélectionnés sans modifier les données. */
+    public function recalculerMasse(): ResponseInterface
+    {
+        $tenantId = $this->requestedPointagesTenant();
+        if ($tenantId === false) {
+            return $this->authorizationError();
+        }
+
+        $input = $this->jsonInput();
+        $ids = $input['pointage_ids'] ?? null;
+        if (! is_array($ids) || $ids === [] || count($ids) > 100) {
+            return $this->errorResponse('Sélectionnez entre 1 et 100 pointages.', 422);
+        }
+        $idsFiltres = [];
+        foreach ($ids as $id) {
+            $validatedId = filter_var($id, FILTER_VALIDATE_INT);
+            if ($validatedId === false || $validatedId < 1) {
+                return $this->errorResponse('La sélection contient un identifiant invalide.', 422);
+            }
+            $idsFiltres[] = (int) $validatedId;
+        }
+        $idsFiltres = array_values(array_unique($idsFiltres));
+
+        $db = Database::connect();
+        $query = $this->pointageRecalculQuery($db)->whereIn('p.id', $idsFiltres);
+        if ($tenantId !== null) {
+            $query->where('p.tenant_id', $tenantId);
+        }
+        $pointages = $query->get()->getResultArray();
+        if (count($pointages) !== count($idsFiltres)) {
+            return $this->errorResponse('Un ou plusieurs pointages sont introuvables dans votre périmètre.', 404);
+        }
+
+        $resultats = [];
+        $erreurs = [];
+        foreach ($pointages as $pointage) {
+            if (! $this->verifierVisibilitePointage($pointage)) {
+                return $this->errorResponse('Un ou plusieurs pointages sont hors de votre périmètre.', 403);
+            }
+            try {
+                $resultats[] = [
+                    'id' => (int) $pointage['id'],
+                    'tenant_id' => (int) $pointage['tenant_id'],
+                    ...$this->calculerPointageRecalcul($pointage, $db),
+                ];
+            } catch (Throwable $exception) {
+                log_message('error', 'Recalcul consultatif en lot du pointage #{id} impossible : {message}', [
+                    'id' => (int) $pointage['id'],
+                    'message' => $exception->getMessage(),
+                ]);
+                $erreurs[] = ['id' => (int) $pointage['id']];
+            }
+        }
+
+        return $this->successResponse([
+            'total' => count($idsFiltres),
+            'calcules' => count($resultats),
+            'erreurs' => $erreurs,
+            'resultats' => $resultats,
+        ], 'Simulation de recalcul terminée. Aucune donnée n’a été modifiée.');
+    }
+
+    private function pointageRecalculQuery(\CodeIgniter\Database\BaseConnection $db): \CodeIgniter\Database\BaseBuilder
+    {
+        return $db->table('pointages p')
+            ->select('p.id, p.tenant_id, p.employe_id, p.badge_id, p.date_pointage, p.type_evenement, p.statut_calcul, COALESCE(e.id, eb.id) AS employe_resolu_id')
+            ->join('employes e', 'e.id = p.employe_id AND e.tenant_id = p.tenant_id AND e.deleted_at IS NULL', 'left')
+            ->join('employes eb', 'eb.tenant_id = p.tenant_id AND eb.badge_id = p.badge_id AND eb.deleted_at IS NULL AND e.id IS NULL', 'left')
+            ->where('p.deleted_at', null);
+    }
+
+    private function verifierVisibilitePointage(array $pointage): bool
+    {
+        $employeId = (int) ($pointage['employe_resolu_id'] ?? 0);
+        $jour = (new DateTimeImmutable((string) $pointage['date_pointage']))->format('Y-m-d');
+        $visibleIds = $this->visibleEmployeeIds($jour);
+        return $visibleIds === null || ($employeId > 0 && in_array($employeId, $visibleIds, true));
+    }
+
+    private function calculerPointageRecalcul(array $pointage, \CodeIgniter\Database\BaseConnection $db): array
+    {
+        $id = (int) $pointage['id'];
+        $tenantId = (int) $pointage['tenant_id'];
+        $jour = (new DateTimeImmutable((string) $pointage['date_pointage']))->format('Y-m-d');
+        $employeId = (int) ($pointage['employe_resolu_id'] ?? 0);
+        $requeteJour = $db->table('pointages')
+            ->select('id, employe_id, badge_id, date_pointage, type_evenement, statut_calcul')
+            ->where('tenant_id', $tenantId)
+            ->where('deleted_at', null)
+            ->where('date_pointage >=', $jour . ' 00:00:00')
+            ->where('date_pointage <=', $jour . ' 23:59:59');
+        if ($employeId > 0) {
+            $requeteJour->groupStart()
+                ->where('employe_id', $employeId)
+                ->orGroupStart()
+                ->where('employe_id', null)
+                ->where('badge_id', (int) $pointage['badge_id'])
+                ->groupEnd()
+                ->groupEnd();
+        } else {
+            $requeteJour->where('badge_id', (int) $pointage['badge_id']);
+        }
+        $pointagesJour = $requeteJour->orderBy('date_pointage', 'ASC')
+            ->orderBy('id', 'ASC')
+            ->get()->getResultArray();
+
+        $horaire = $employeId > 0
+            ? (new HoraireService($db))->getHoraireEmploye($employeId, $jour)
+            : [];
+        if ($horaire === []) {
+            $horaire = $db->table('tenant_horaires')
+                ->where('tenant_id', $tenantId)
+                ->where('est_defaut', 1)
+                ->where('actif', 1)
+                ->where('deleted_at', null)
+                ->orderBy('id', 'ASC')
+                ->get()->getRowArray() ?? [];
+        }
+        $plages = $horaire['plages_horaires'] ?? [];
+        if (is_string($plages)) $plages = json_decode($plages, true);
+        if (! is_array($plages)) $plages = [];
+
+        $resultats = (new PointageTypeService())->determinerTypesEtStatuts($pointagesJour, $plages);
+        foreach ($resultats as $index => $resultat) {
+            if ((int) $resultat['id'] === $id) {
+                return [
+                    'pointage_avant' => [
+                        'type_evenement' => $pointage['type_evenement'],
+                        'statut_calcul' => $pointage['statut_calcul'],
+                    ],
+                    'pointage_apres' => [
+                        'type_evenement' => $resultat['type_evenement'],
+                        'statut_calcul' => $resultat['statut_calcul'],
+                    ],
+                    'contexte' => [
+                        'date' => $jour,
+                        'nb_pointages_jour' => count($pointagesJour),
+                        'position' => $index + 1,
+                        'horaire' => $horaire['nom'] ?? 'Standard',
+                    ],
+                ];
+            }
+        }
+        throw new \RuntimeException('Le pointage sélectionné est absent du résultat de simulation.');
     }
 
     public function presence(int $employeId): ResponseInterface
@@ -1041,6 +1182,23 @@ class PointagesController extends BaseApiController
     private function employeAppartientAuTenant(int $employeId, int $tenantId): bool
     {
         return (new EmployeModel())->where('tenant_id', $tenantId)->find($employeId) !== null;
+    }
+
+    /**
+     * false = accès refusé, null = super-admin sur tous les tenants, int = tenant choisi.
+     */
+    private function requestedPointagesTenant(): int|false|null
+    {
+        $requested = $this->request->getGet('tenant_id');
+        if ($requested === null || $requested === '') {
+            return $this->isSuperAdmin() ? null : ($this->tenantId() ?? false);
+        }
+
+        $tenantId = filter_var($requested, FILTER_VALIDATE_INT);
+        if ($tenantId === false || $tenantId < 1) {
+            return false;
+        }
+        return $this->tenantId((int) $tenantId) ?? false;
     }
 
     private function dateValide(string $date): bool

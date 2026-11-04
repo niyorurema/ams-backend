@@ -30,4 +30,27 @@ final class PointageStatsServiceTest extends CIUnitTestCase
             ['date' => '2026-09-02', 'count' => 3],
         ], $resultat['par_jour']);
     }
+
+    public function testCompteLesEmployesEtCapteursDistinctsParTenant(): void
+    {
+        $resultat = (new PointageStatsService())->calculerDepuisCollection([
+            [
+                'tenant_id' => 1,
+                'date_pointage' => '2026-09-01 07:30:00',
+                'type_evenement' => 'CHECK_IN',
+                'employe_id' => 5,
+                'capteur_id' => 2,
+            ],
+            [
+                'tenant_id' => 2,
+                'date_pointage' => '2026-09-01 07:30:00',
+                'type_evenement' => 'CHECK_IN',
+                'employe_id' => 5,
+                'capteur_id' => 2,
+            ],
+        ], '2026-09-01', '2026-09-01');
+
+        $this->assertSame(2, $resultat['employes_actifs']);
+        $this->assertSame(2, $resultat['capteurs_utilises']);
+    }
 }

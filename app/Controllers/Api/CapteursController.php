@@ -15,6 +15,16 @@ class CapteursController extends BaseApiController
 {
     public function index(?int $requestedTenantId = null): ResponseInterface
     {
+        if ($requestedTenantId === null) {
+            $queryTenantId = $this->request->getGet('tenant_id');
+            if ($queryTenantId !== null && $queryTenantId !== '') {
+                $validatedTenantId = filter_var($queryTenantId, FILTER_VALIDATE_INT);
+                if ($validatedTenantId === false || $validatedTenantId < 1) {
+                    return $this->errorResponse('Identifiant tenant invalide.', 400);
+                }
+                $requestedTenantId = (int) $validatedTenantId;
+            }
+        }
         $tenantId = $this->tenantId($requestedTenantId);
         if ($tenantId === null) {
             return $this->authorizationError();
@@ -29,6 +39,17 @@ class CapteursController extends BaseApiController
             ->select($this->champsPublics())
             ->where('tenant_id', $tenantId)
             ->orderBy('nom', 'ASC');
+        $search = trim((string) $this->request->getGet('search'));
+        if (mb_strlen($search) > 100) {
+            return $this->errorResponse('La recherche est trop longue.', 400);
+        }
+        if ($search !== '') {
+            $query->groupStart()
+                ->like('nom', $search)
+                ->orLike('adresse_ip', $search)
+                ->orLike('numero_serie', $search)
+                ->groupEnd();
+        }
         $statuts = $this->request->getGet('statut');
         if ($statuts !== null && $statuts !== '') {
             if (is_array($statuts) && array_filter($statuts, 'is_string') !== $statuts) {
@@ -42,6 +63,13 @@ class CapteursController extends BaseApiController
             $query->whereIn('statut', $statuts);
         }
         $countQuery = (new CapteurModel())->where('tenant_id', $tenantId);
+        if ($search !== '') {
+            $countQuery->groupStart()
+                ->like('nom', $search)
+                ->orLike('adresse_ip', $search)
+                ->orLike('numero_serie', $search)
+                ->groupEnd();
+        }
         if ($statuts !== null && $statuts !== '') {
             $countQuery->whereIn('statut', $statuts);
         }
