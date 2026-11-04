@@ -503,7 +503,8 @@ class UsersController extends BaseApiController
             return $this->errorResponse('Le statut actif est invalide.', 422);
         }
         if (array_key_exists('is_super_admin', $input)
-            && ! in_array((string) $input['is_super_admin'], ['0', '1', 'true', 'false'], true)
+            && ! is_bool($input['is_super_admin'])
+            && ! in_array($input['is_super_admin'], ['0', '1', 'true', 'false', 0, 1], true)
         ) {
             return $this->errorResponse('Le statut super-administrateur est invalide.', 422);
         }
