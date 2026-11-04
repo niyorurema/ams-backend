@@ -66,8 +66,9 @@ class AuthController extends BaseApiController
         $this->resetFailedLogin($tenantId, $email, $ip);
 
         $ttl = max(60, min(86400, (int) env('JWT_TTL', 3600)));
-        $secureCookie = filter_var(env('AUTH_COOKIE_SECURE', true), FILTER_VALIDATE_BOOLEAN);
-        $sameSite = trim((string) env('AUTH_COOKIE_SAMESITE', 'None')) ?: 'None';
+        $secureByDefault = defined('ENVIRONMENT') && ENVIRONMENT === 'production';
+        $secureCookie = filter_var(env('AUTH_COOKIE_SECURE', $secureByDefault), FILTER_VALIDATE_BOOLEAN);
+        $sameSite = trim((string) env('AUTH_COOKIE_SAMESITE', 'Lax')) ?: 'Lax';
         $cookieDomain = trim((string) env('AUTH_COOKIE_DOMAIN', ''));
         $user = $resultat['user'];
         $response = $this->successResponse([
@@ -99,8 +100,9 @@ class AuthController extends BaseApiController
     public function logout(): ResponseInterface
     {
         $cookieDomain = trim((string) env('AUTH_COOKIE_DOMAIN', ''));
-        $secureCookie = filter_var(env('AUTH_COOKIE_SECURE', true), FILTER_VALIDATE_BOOLEAN);
-        $sameSite = trim((string) env('AUTH_COOKIE_SAMESITE', 'None')) ?: 'None';
+        $secureByDefault = defined('ENVIRONMENT') && ENVIRONMENT === 'production';
+        $secureCookie = filter_var(env('AUTH_COOKIE_SECURE', $secureByDefault), FILTER_VALIDATE_BOOLEAN);
+        $sameSite = trim((string) env('AUTH_COOKIE_SAMESITE', 'Lax')) ?: 'Lax';
         $response = $this->successResponse(null, 'Déconnexion réussie.');
         $response->setCookie('ams_access_token', '', time() - 3600, $cookieDomain, '/', '', $secureCookie, true, $sameSite);
         return $response;
