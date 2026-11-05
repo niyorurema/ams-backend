@@ -33,6 +33,10 @@ class CapteurModel extends Model
         'firmware',
         'platform',
         'statut',
+        'derniere_communication',
+        'source_derniere_communication',
+        'frequence_adms_secondes',
+        'frequence_polling_secondes',
         'dernier_scan',
         'derniere_sync_users',
         'derniere_sync_attendance',
@@ -49,7 +53,7 @@ class CapteurModel extends Model
         'adresse_ip'=> 'required|valid_ip',
         'port'      => 'required|integer|greater_than_equal_to[1]|less_than_equal_to[65535]',
         'type_reseau' => 'required|in_list[LAN,NETBIRD]',
-        'statut'    => 'required|in_list[ACTIF,INACTIF,HORS_LIGNE]',
+        'statut'    => 'required|in_list[ACTIF,INACTIF]',
         'timeout_secondes' => 'required|integer|greater_than_equal_to[1]|less_than_equal_to[300]',
     ];
 

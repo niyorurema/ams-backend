@@ -9,6 +9,7 @@ use App\Services\PointageEmployeResolver;
 use App\Services\PointageReclassificationService;
 use App\Services\RealtimeService;
 use App\Services\AuditContext;
+use App\Services\CapteurPresenceService;
 use CodeIgniter\Controller;
 use CodeIgniter\HTTP\ResponseInterface;
 use DateTimeImmutable;
@@ -19,6 +20,8 @@ use Throwable;
  */
 class IclockController extends Controller
 {
+    private const ADMS_TRANSMISSION_INTERVAL_MINUTES = 1;
+
     /**
      * Répond aux demandes de configuration et reçoit les données poussées.
      */
@@ -112,6 +115,8 @@ class IclockController extends Controller
         }
 
         if (! filter_var(env('ADMS_REQUIRE_SIGNATURE', false), FILTER_VALIDATE_BOOLEAN)) {
+            $this->enregistrerCommunicationAdms((int) $capteur['id']);
+
             return null;
         }
 
@@ -134,7 +139,18 @@ class IclockController extends Controller
             return $this->textResponse('Forbidden', 403);
         }
 
+        $this->enregistrerCommunicationAdms((int) $capteur['id']);
+
         return null;
+    }
+
+    private function enregistrerCommunicationAdms(int $capteurId): void
+    {
+        (new CapteurPresenceService())->record(
+            $capteurId,
+            CapteurPresenceService::SOURCE_ADMS,
+            self::ADMS_TRANSMISSION_INTERVAL_MINUTES * 60
+        );
     }
 
     /**
@@ -472,7 +488,7 @@ class IclockController extends Controller
             'ErrorDelay=30',
             'Delay=10',
             'TransTimes=00:00;23:59',
-            'TransInterval=1',
+            'TransInterval=' . self::ADMS_TRANSMISSION_INTERVAL_MINUTES,
             'TransFlag=1111000000',
             'Realtime=1',
             'Encrypt=0',

@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Libraries\ZKTecoPullClient;
 use App\Models\CapteurModel;
+use App\Services\CapteurPresenceService;
 use App\Models\EmployeModel;
 use App\Models\PointageModel;
 use App\Models\SyncLogModel;
@@ -206,7 +207,8 @@ class ZKTecoService
         ?string $endDate = null,
         int $batchSize = 1000,
         int $startIndex = 0,
-        ?callable $onPrepared = null
+        ?callable $onPrepared = null,
+        int $pollIntervalSeconds = CapteurPresenceService::DEFAULT_POLL_INTERVAL_SECONDS
     ): Generator {
         $capteur = $this->getCapteurConfig($capteurId);
         $client = new ZKTecoPullClient(
@@ -226,6 +228,11 @@ class ZKTecoService
 
         try {
             $client->connect();
+            (new CapteurPresenceService())->record(
+                $capteurId,
+                CapteurPresenceService::SOURCE_SERVER_POLL,
+                $pollIntervalSeconds
+            );
             $userIdToUid = $this->loadUserIdToUid((int) $capteur['tenant_id']);
 
             foreach ($client->getAttendanceBatches($batchSize, $userIdToUid, $startIndex, $onPrepared) as $batch) {
@@ -328,6 +335,9 @@ class ZKTecoService
                 'platform' => $deviceInfo['platform'] ?? null,
                 'dernier_scan' => date('Y-m-d H:i:s'),
                 'derniere_erreur' => null,
+                'derniere_communication' => date('Y-m-d H:i:s'),
+                'source_derniere_communication' => CapteurPresenceService::SOURCE_SERVER_POLL,
+                'frequence_polling_secondes' => CapteurPresenceService::DEFAULT_POLL_INTERVAL_SECONDS,
             ]);
 
             return $deviceInfo;
@@ -364,9 +374,6 @@ class ZKTecoService
                 'dernier_scan' => date('Y-m-d H:i:s'),
                 'derniere_erreur' => null,
             ];
-            if ($capteur['statut'] !== 'INACTIF') {
-                $update['statut'] = 'ACTIF';
-            }
             if ($this->capteurModel->update($capteurId, $update) === false) {
                 throw new \RuntimeException('Impossible d’enregistrer le résultat du test du capteur.');
             }
@@ -383,11 +390,9 @@ class ZKTecoService
 
             return $info;
         } catch (Throwable $e) {
-            $update = ['derniere_erreur' => $e->getMessage()];
-            if ($capteur['statut'] !== 'INACTIF') {
-                $update['statut'] = 'HORS_LIGNE';
+            if ($this->capteurModel->update($capteurId, ['derniere_erreur' => $e->getMessage()]) === false) {
+                log_message('error', 'Impossible d’enregistrer l’erreur du test du capteur #{id}.', ['id' => $capteurId]);
             }
-            $this->capteurModel->update($capteurId, $update);
             $this->logSync(
                 (int) $capteur['tenant_id'],
                 $capteurId,
@@ -709,16 +714,24 @@ class ZKTecoService
      * @param int $capteurId Identifiant du capteur.
      * @return array Résultat de synchronisation.
      */
-    public function syncPointages(int $capteurId, int $batchSize = 500, ?int $limit = null): array
-    {
+    public function syncPointages(
+        int $capteurId,
+        int $batchSize = 500,
+        ?int $limit = null,
+        int $pollIntervalSeconds = CapteurPresenceService::DEFAULT_POLL_INTERVAL_SECONDS
+    ): array {
         if ($batchSize < 1 || $batchSize > 5000) {
             throw new \InvalidArgumentException('La taille de lot doit être comprise entre 1 et 5000.');
         }
         if ($limit !== null && $limit < 1) {
             throw new \InvalidArgumentException('La limite doit être supérieure à zéro.');
         }
+        if ($pollIntervalSeconds < 1 || $pollIntervalSeconds > 86400) {
+            throw new \InvalidArgumentException('La fréquence du scanner doit être comprise entre 1 et 86400 secondes.');
+        }
 
         $capteur = $this->getCapteurConfig($capteurId);
+        (new CapteurPresenceService())->configurePollingInterval($capteurId, $pollIntervalSeconds);
         $start = microtime(true);
         $checkpoint = $capteur['dernier_pointage_sync'] ?? null;
         $checkpointCandidate = $checkpoint;
@@ -742,7 +755,8 @@ class ZKTecoService
                 $indexDepart,
                 static function (int $recordCount) use (&$nombrePointagesCapteur): void {
                     $nombrePointagesCapteur = $recordCount;
-                }
+                },
+                $pollIntervalSeconds
             ) as $batch) {
                 if ($limit !== null) {
                     $remaining = $limit - $stats['lus'];
@@ -975,6 +989,8 @@ class ZKTecoService
             $capteurUpdate = [
                 'derniere_sync_attendance' => date('Y-m-d H:i:s'),
                 'derniere_erreur' => null,
+                'derniere_communication' => date('Y-m-d H:i:s'),
+                'source_derniere_communication' => CapteurPresenceService::SOURCE_SERVER_POLL,
             ];
             if ($limit === null && $nombrePointagesCapteur !== null) {
                 $capteurUpdate['dernier_pointage_index'] = $nombrePointagesCapteur;

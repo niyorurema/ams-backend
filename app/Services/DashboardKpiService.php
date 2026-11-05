@@ -5,6 +5,7 @@ namespace App\Services;
 use CodeIgniter\Database\BaseConnection;
 use Config\Database;
 use DateTimeImmutable;
+use App\Services\CapteurPresenceService;
 
 /** Agrège les indicateurs quotidiens du dashboard pour un seul tenant. */
 final class DashboardKpiService
@@ -30,7 +31,7 @@ final class DashboardKpiService
         $debutMoisPrecedent = $maintenant->modify('first day of last month')->format('Y-m-d');
         $finMoisPrecedent = $maintenant->modify('last day of last month')->format('Y-m-d');
 
-        $cacheKey = 'dashboard_kpis_' . $tenantId . '_' . $date;
+        $cacheKey = 'dashboard_kpis_' . $tenantId . '_' . $date . '_presence_v2';
         $cached = service('cache')->get($cacheKey);
         if (is_array($cached)) {
             return $cached;
@@ -325,8 +326,8 @@ final class DashboardKpiService
             ],
             'pointages_recents' => $pointagesRecents,
             'capteurs' => [
-                'actifs' => count(array_filter($capteurs, static fn (array $item): bool => $item['statut'] === 'ACTIF')),
-                'indisponibles' => array_values(array_filter($capteurs, static fn (array $item): bool => $item['statut'] !== 'ACTIF')),
+                'actifs' => count(array_filter($capteurs, static fn (array $item): bool => $item['etat_connexion'] === 'ONLINE')),
+                'indisponibles' => array_values(array_filter($capteurs, static fn (array $item): bool => $item['etat_connexion'] !== 'ONLINE')),
             ],
             'heures_sup' => $heuresSup,
             'alertes' => $alertes,
@@ -572,13 +573,19 @@ final class DashboardKpiService
     /** @return list<array<string, mixed>> */
     private function chargerCapteurs(int $tenantId): array
     {
-        return $this->db->table('capteurs')
-            ->select('id, nom, adresse_ip, port, statut')
+        $capteurs = $this->db->table('capteurs')
+            ->select('id, nom, adresse_ip, port, statut, derniere_communication, source_derniere_communication, frequence_adms_secondes, frequence_polling_secondes')
             ->where('tenant_id', $tenantId)
             ->where('deleted_at', null)
             ->orderBy('nom', 'ASC')
             ->get()
             ->getResultArray();
+
+        return array_map(static function (array $capteur): array {
+            $capteur['etat_connexion'] = CapteurPresenceService::status($capteur);
+
+            return $capteur;
+        }, $capteurs);
     }
 
     /** @return list<array<string, mixed>> */

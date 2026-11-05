@@ -85,7 +85,10 @@ class CapteursScan extends BaseCommand
 
             foreach ($capteurIds as $currentSensorId) {
                 try {
-                    $result = (new ZKTecoService())->syncPointages($currentSensorId);
+                    $result = (new ZKTecoService())->syncPointages(
+                        $currentSensorId,
+                        pollIntervalSeconds: $interval ?? 60
+                    );
                     $stats = $result['stats'];
                     $cycleSummary['capteurs'][$currentSensorId] = [
                         'status' => $result['status'],

@@ -142,6 +142,10 @@ Les commandes applicatives incluent notamment :
 | `demo:bout-en-bout` | Démonstration opt-in sur le tenant isolé DEMO |
 | `demo:nettoyer [--force]` | Nettoyer les données du tenant DEMO après confirmation |
 
+### Statut réel des capteurs
+
+Le statut de connexion est distinct de l’activation administrative. Les communications ADMS valides sont suivies selon `TransInterval=1` minute; les interrogations AMS reprennent l’intervalle configuré sur `capteurs:scan` ou `capteurs:scan-all --interval`. Un capteur actif est indiqué hors ligne après trois intervalles sans communication réussie, et inconnu avant son premier contact. La page des capteurs actualise cet état toutes les 15 secondes.
+
 ### Journal d’audit
 
 La migration `CreateAuditLogs` installe des déclencheurs MySQL sur les tables AMS existantes; le compte utilisé pour les migrations doit donc avoir le privilège `TRIGGER`. Ils enregistrent les insertions, modifications et suppressions avec l’acteur authentifié, le tenant, l’objet, les valeurs avant/après, l’adresse IP, le navigateur, l’identifiant de requête et, lorsque disponible, le capteur associé. Les requêtes API exposent aussi cet identifiant dans l’en-tête `X-Request-ID`.

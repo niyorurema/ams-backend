@@ -51,6 +51,8 @@ Rendez `writable/` accessible en écriture au processus PHP; le reste du code de
 
 Après le déploiement de la migration, le panneau **Paramètres → Intégrations** (super-administrateur uniquement) affiche les dernières exécutions des rapports J-1, synchronisations GPIO et traitements des capteurs, avec leur état, leur dernier signal de vie et leurs erreurs. Les traitements continus `capteurs:scan` et `capteurs:scan-all` mettent à jour ce signal à chaque cycle; une exécution sans signal depuis 15 minutes est marquée obsolète.
 
+L’état de connexion affiché pour les capteurs est calculé à partir de communications réussies, indépendamment de leur activation administrative. Les requêtes ADMS valides sont suivies selon l’intervalle envoyé dans la configuration ADMS (`TransInterval=1`, soit une minute); les capteurs interrogés par AMS utilisent l’intervalle de `capteurs:scan-all --interval`. Un capteur actif est indiqué hors ligne après trois intervalles sans communication réussie, et reste inconnu tant qu’aucune communication n’a été observée. La page actualise cet état toutes les 15 secondes.
+
 Pour traiter les relances mises en file par le panneau, planifiez sur le serveur un lancement fréquent du worker, par exemple chaque minute avec cron :
 
 ```cron

@@ -51,7 +51,10 @@ class CapteursScanAll extends BaseCommand
             $cycleSummary = ['capteurs' => [], 'erreurs' => []];
             foreach ($capteurs as $capteur) {
                 try {
-                    $result = (new ZKTecoService())->syncPointages((int) $capteur['id']);
+                    $result = (new ZKTecoService())->syncPointages(
+                        (int) $capteur['id'],
+                        pollIntervalSeconds: $interval
+                    );
                     $sensorStatus = $result['status'] ?? 'UNKNOWN';
                     $cycleSummary['capteurs'][$capteur['id']] = [
                         'status' => $sensorStatus,

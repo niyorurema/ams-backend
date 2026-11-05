@@ -4,6 +4,7 @@ namespace App\Controllers\Api;
 
 use App\Models\CapteurModel;
 use App\Services\AffectationService;
+use App\Services\CapteurPresenceService;
 use App\Services\ZKTecoService;
 use CodeIgniter\HTTP\ResponseInterface;
 use Throwable;
@@ -60,7 +61,7 @@ class CapteursController extends BaseApiController
             if ($statuts === [] || array_diff($statuts, ['ACTIF', 'INACTIF', 'HORS_LIGNE']) !== []) {
                 return $this->errorResponse('Filtre de statut invalide.', 400);
             }
-            $query->whereIn('statut', $statuts);
+            $this->appliquerFiltreStatut($query, $statuts);
         }
         $countQuery = (new CapteurModel())->where('tenant_id', $tenantId);
         if ($search !== '') {
@@ -71,10 +72,13 @@ class CapteursController extends BaseApiController
                 ->groupEnd();
         }
         if ($statuts !== null && $statuts !== '') {
-            $countQuery->whereIn('statut', $statuts);
+            $this->appliquerFiltreStatut($countQuery, $statuts);
         }
         $total = $countQuery->countAllResults();
-        $capteurs = $query->findAll($limit, $offset);
+        $capteurs = array_map(
+            static fn (array $capteur): array => self::withConnectionStatus($capteur),
+            $query->findAll($limit, $offset)
+        );
 
         return $this->successResponse([
             'items' => $capteurs,
@@ -88,7 +92,7 @@ class CapteursController extends BaseApiController
         $capteur = $this->trouverCapteur($id);
         return $capteur === null
             ? $this->errorResponse('Capteur introuvable.', 404)
-            : $this->successResponse($capteur);
+            : $this->successResponse(self::withConnectionStatus($capteur));
     }
 
     public function create(): ResponseInterface
@@ -110,6 +114,9 @@ class CapteursController extends BaseApiController
         $data['port'] = $data['port'] ?? 4370;
         $data['type_reseau'] = $data['type_reseau'] ?? 'LAN';
         $data['statut'] = $data['statut'] ?? 'ACTIF';
+        if (! in_array($data['statut'], ['ACTIF', 'INACTIF'], true)) {
+            return $this->errorResponse('Le statut administratif doit être ACTIF ou INACTIF.', 422);
+        }
         $data['com_key'] = array_key_exists('com_key', $data) && trim((string) $data['com_key']) !== ''
             ? (string) $data['com_key']
             : '0';
@@ -119,7 +126,13 @@ class CapteursController extends BaseApiController
             return $this->errorResponse(implode(' ', $model->errors()), 422);
         }
 
-        return $this->successResponse($this->trouverCapteur((int) $model->getInsertID()), 'Capteur créé.', 201);
+        $capteur = $this->trouverCapteur((int) $model->getInsertID());
+
+        return $this->successResponse(
+            $capteur === null ? null : self::withConnectionStatus($capteur),
+            'Capteur créé.',
+            201
+        );
     }
 
     public function update(int $id): ResponseInterface
@@ -138,6 +151,9 @@ class CapteursController extends BaseApiController
         if ($data === []) {
             return $this->errorResponse('Aucun champ modifiable fourni.', 400);
         }
+        if (isset($data['statut']) && ! in_array($data['statut'], ['ACTIF', 'INACTIF'], true)) {
+            return $this->errorResponse('Le statut administratif doit être ACTIF ou INACTIF.', 422);
+        }
         if (array_key_exists('com_key', $data)) {
             $data['com_key'] = trim((string) $data['com_key']) !== '' ? (string) $data['com_key'] : '0';
         }
@@ -150,7 +166,12 @@ class CapteursController extends BaseApiController
             return $this->errorResponse(implode(' ', $model->errors()), 422);
         }
 
-        return $this->successResponse($this->trouverCapteur($id), 'Capteur mis à jour.');
+        $capteur = $this->trouverCapteur($id);
+
+        return $this->successResponse(
+            $capteur === null ? null : self::withConnectionStatus($capteur),
+            'Capteur mis à jour.'
+        );
     }
 
     public function delete(int $id): ResponseInterface
@@ -318,11 +339,59 @@ class CapteursController extends BaseApiController
         $champs = [
             'id', 'tenant_id', 'nom', 'numero_serie', 'adresse_ip', 'port', 'type_reseau',
             'firmware', 'platform', 'statut', 'dernier_scan', 'derniere_sync_users',
-            'derniere_sync_attendance', 'timeout_secondes', 'notes',
+            'derniere_sync_attendance', 'timeout_secondes', 'notes', 'derniere_communication',
+            'source_derniere_communication', 'frequence_adms_secondes', 'frequence_polling_secondes',
         ];
         if ($this->canManage()) {
             $champs[] = 'com_key';
         }
         return $champs;
+    }
+
+    /** @param array<string, mixed> $capteur
+     *  @return array<string, mixed>
+     */
+    private static function withConnectionStatus(array $capteur): array
+    {
+        $capteur['etat_connexion'] = CapteurPresenceService::status($capteur);
+
+        return $capteur;
+    }
+
+    /** @param array<int, string> $statuts */
+    private function appliquerFiltreStatut(object $query, array $statuts): void
+    {
+        $query->groupStart();
+        $hasStatus = false;
+        foreach (['ACTIF', 'INACTIF'] as $status) {
+            if (in_array($status, $statuts, true)) {
+                $hasStatus
+                    ? $query->orWhere('statut', $status)
+                    : $query->where('statut', $status);
+                $hasStatus = true;
+            }
+        }
+        if (in_array('HORS_LIGNE', $statuts, true)) {
+            $offline = static function (object $builder): void {
+                $builder->where('statut', 'ACTIF')
+                    ->where('derniere_communication IS NOT NULL', null, false)
+                    ->groupStart()
+                        ->groupStart()
+                            ->where('source_derniere_communication', 'ADMS')
+                            ->where('frequence_adms_secondes IS NOT NULL', null, false)
+                            ->where('TIMESTAMPDIFF(SECOND, derniere_communication, NOW()) > frequence_adms_secondes * 3', null, false)
+                        ->groupEnd()
+                        ->orGroupStart()
+                            ->where('source_derniere_communication', 'SERVER_POLL')
+                            ->where('frequence_polling_secondes IS NOT NULL', null, false)
+                            ->where('TIMESTAMPDIFF(SECOND, derniere_communication, NOW()) > frequence_polling_secondes * 3', null, false)
+                        ->groupEnd()
+                    ->groupEnd();
+            };
+            $hasStatus ? $query->orGroupStart() : $query->groupStart();
+            $offline($query);
+            $query->groupEnd();
+        }
+        $query->groupEnd();
     }
 }
