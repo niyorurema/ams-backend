@@ -68,6 +68,12 @@ final class CapteurPresenceService
             return 'INACTIVE';
         }
 
+        return self::communicationStatus($capteur, $now);
+    }
+
+    /** @param array<string, mixed> $capteur */
+    public static function communicationStatus(array $capteur, ?DateTimeImmutable $now = null): string
+    {
         $lastCommunication = $capteur['derniere_communication'] ?? null;
         $frequencyField = match ($capteur['source_derniere_communication'] ?? null) {
             self::SOURCE_ADMS => 'frequence_adms_secondes',

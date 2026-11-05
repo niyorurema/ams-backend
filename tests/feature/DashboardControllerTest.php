@@ -71,6 +71,8 @@ final class DashboardControllerTest extends CIUnitTestCase
         $employes = $payload['data']['employes'];
 
         $this->assertSame(200, $response->getStatusCode());
+        $this->assertArrayHasKey('sante_collecte', $payload['data']);
+        $this->assertContains($payload['data']['sante_collecte']['etat'], ['OK', 'ATTENTION', 'UNKNOWN']);
         $this->assertSame(2, $employes['attendus_aujourdhui']);
         $this->assertSame(1, $employes['presents']);
         $this->assertSame(1, $employes['absents']);
@@ -91,6 +93,91 @@ final class DashboardControllerTest extends CIUnitTestCase
         $this->assertSame(1, $stats['en_cours']);
         $this->assertSame(1, $stats['absents']);
         $this->assertSame(0, $stats['presents']);
+    }
+
+    public function testDashboardProvidesAllFourAttendanceSeries(): void
+    {
+        $date = (new DateTimeImmutable('now', new \DateTimeZone('Africa/Bujumbura')))->format('Y-m-d');
+        $jour = (int) (new DateTimeImmutable($date))->format('N');
+        $joursTravail = json_encode([$jour], JSON_THROW_ON_ERROR);
+        $maintenant = date('Y-m-d H:i:s');
+        $employes = [$this->employeId];
+        for ($index = 0; $index < 3; $index++) {
+            $employes[] = $this->creerEmploye($this->tenantId);
+        }
+
+        foreach ($employes as $employeId) {
+            $this->attendanceDb->table('employe_contrats_horaire')->insert([
+                'tenant_id' => $this->tenantId,
+                'employe_id' => $employeId,
+                'mode_travail' => 'TEMPS_PLEIN',
+                'heure_debut' => '07:30:00',
+                'heure_fin' => '17:30:00',
+                'jours_travail' => $joursTravail,
+                'date_debut' => $date,
+                'date_fin' => null,
+                'actif' => 1,
+                'created_at' => $maintenant,
+            ]);
+        }
+
+        foreach ([
+            ['PRESENT', 'OK', '07:30:00'],
+            ['RETARD', 'RETARD', '08:00:00'],
+            ['EN_COURS', null, null],
+            ['ABSENT', 'ABSENT', null],
+        ] as $index => [$statutGlobal, $statutArrivee, $heureArrivee]) {
+            $this->attendanceDb->table('pointages_journee')->insert([
+                'tenant_id' => $this->tenantId,
+                'employe_id' => $employes[$index],
+                'date' => $date,
+                'source_calcul' => 'CONTRAT',
+                'heure_arrivee' => $heureArrivee,
+                'statut_arrivee' => $statutArrivee,
+                'heure_depart' => null,
+                'statut_global' => $statutGlobal,
+                'details' => '{}',
+                'calcule_le' => $maintenant,
+                'created_at' => $maintenant,
+            ]);
+        }
+
+        $response = $this->controller()->kpis();
+        $payload = json_decode($response->getBody(), true, 512, JSON_THROW_ON_ERROR)['data'];
+        $evolutionAujourdhui = array_values(array_filter(
+            $payload['evolution_presence'],
+            static fn (array $journee): bool => $journee['date'] === $date
+        ));
+
+        $this->assertCount(1, $evolutionAujourdhui);
+        $this->assertSame(2, $evolutionAujourdhui[0]['presents']);
+        $this->assertSame(1, $evolutionAujourdhui[0]['retards']);
+        $this->assertSame(1, $evolutionAujourdhui[0]['absents']);
+        $this->assertSame(1, $evolutionAujourdhui[0]['en_cours']);
+    }
+
+    public function testCollectionHealthUsesActualCommunicationInsteadOfAdministrativeStatus(): void
+    {
+        $this->attendanceDb->table('capteurs')->insert([
+            'tenant_id' => $this->tenantId,
+            'nom' => 'Capteur désactivé mais joignable',
+            'adresse_ip' => '192.0.2.10',
+            'port' => 4370,
+            'type_reseau' => 'LAN',
+            'statut' => 'INACTIF',
+            'derniere_communication' => date('Y-m-d H:i:s'),
+            'source_derniere_communication' => 'ADMS',
+            'frequence_adms_secondes' => 60,
+            'created_at' => date('Y-m-d H:i:s'),
+        ]);
+
+        $response = $this->controller()->kpis();
+        $health = json_decode($response->getBody(), true, 512, JSON_THROW_ON_ERROR)['data']['sante_collecte'];
+
+        $this->assertSame('OK', $health['etat']);
+        $this->assertSame(1, $health['capteurs_total']);
+        $this->assertSame(1, $health['capteurs_en_ligne']);
+        $this->assertSame(0, $health['capteurs_inconnus']);
     }
 
     public function testEvolutionAndRecentPointagesUseRawEventsWhenContractsAreNotConfigured(): void

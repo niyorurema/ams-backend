@@ -31,7 +31,7 @@ final class DashboardKpiService
         $debutMoisPrecedent = $maintenant->modify('first day of last month')->format('Y-m-d');
         $finMoisPrecedent = $maintenant->modify('last day of last month')->format('Y-m-d');
 
-        $cacheKey = 'dashboard_kpis_' . $tenantId . '_' . $date . '_presence_v2';
+        $cacheKey = 'dashboard_kpis_' . $tenantId . '_' . $date . '_presence_v4';
         $cached = service('cache')->get($cacheKey);
         if (is_array($cached)) {
             return $cached;
@@ -275,6 +275,25 @@ final class DashboardKpiService
             $presenceJour['sans_pointage_depart'],
             $contrats === []
         );
+        $pointagesNonAssocies = array_sum(array_map(
+            static fn (array $alerte): int => $alerte['type'] === 'ORPHELINS' ? (int) $alerte['count'] : 0,
+            $alertes
+        ));
+        $capteursEnLigne = count(array_filter(
+            $capteurs,
+            static fn (array $capteur): bool => $capteur['etat_connexion_reel'] === 'ONLINE'
+        ));
+        $capteursHorsLigne = count(array_filter(
+            $capteurs,
+            static fn (array $capteur): bool => $capteur['etat_connexion_reel'] === 'OFFLINE'
+        ));
+        $capteursInconnus = count(array_filter(
+            $capteurs,
+            static fn (array $capteur): bool => $capteur['etat_connexion_reel'] === 'UNKNOWN'
+        ));
+        $etatSanteCollecte = $capteursHorsLigne > 0 || $pointagesNonAssocies > 0
+            ? 'ATTENTION'
+            : ($capteursInconnus > 0 || $capteurs === [] ? 'UNKNOWN' : 'OK');
 
         $hier = $maintenant->modify('-1 day')->format('Y-m-d');
         $comparaisonHier = null;
@@ -328,6 +347,14 @@ final class DashboardKpiService
             'capteurs' => [
                 'actifs' => count(array_filter($capteurs, static fn (array $item): bool => $item['etat_connexion'] === 'ONLINE')),
                 'indisponibles' => array_values(array_filter($capteurs, static fn (array $item): bool => $item['etat_connexion'] !== 'ONLINE')),
+            ],
+            'sante_collecte' => [
+                'etat' => $etatSanteCollecte,
+                'capteurs_total' => count($capteurs),
+                'capteurs_en_ligne' => $capteursEnLigne,
+                'capteurs_hors_ligne' => $capteursHorsLigne,
+                'capteurs_inconnus' => $capteursInconnus,
+                'pointages_non_associes' => $pointagesNonAssocies,
             ],
             'heures_sup' => $heuresSup,
             'alertes' => $alertes,
@@ -583,6 +610,7 @@ final class DashboardKpiService
 
         return array_map(static function (array $capteur): array {
             $capteur['etat_connexion'] = CapteurPresenceService::status($capteur);
+            $capteur['etat_connexion_reel'] = CapteurPresenceService::communicationStatus($capteur);
 
             return $capteur;
         }, $capteurs);
