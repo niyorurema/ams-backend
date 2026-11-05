@@ -8,6 +8,7 @@ use App\Models\PointageModel;
 use App\Services\PointageEmployeResolver;
 use App\Services\PointageReclassificationService;
 use App\Services\RealtimeService;
+use App\Services\AuditContext;
 use CodeIgniter\Controller;
 use CodeIgniter\HTTP\ResponseInterface;
 use DateTimeImmutable;
@@ -157,6 +158,17 @@ class IclockController extends Controller
 
             return $this->textResponse('OK');
         }
+
+        $metadata = AuditContext::requestMetadata($this->request);
+        AuditContext::apply(
+            null,
+            (int) $capteur['tenant_id'],
+            'DEVICE',
+            (int) $capteur['id'],
+            bin2hex(random_bytes(16)),
+            $metadata['ip_address'],
+            $metadata['user_agent']
+        );
 
         try {
             switch ($table) {

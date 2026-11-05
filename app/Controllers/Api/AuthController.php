@@ -46,6 +46,7 @@ class AuthController extends BaseApiController
         $options = [
             'ip' => $ip,
             'user_agent' => $this->request->getUserAgent()->getAgentString(),
+            'request_id' => $this->auditRequestId,
         ];
 
         try {

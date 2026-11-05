@@ -4,9 +4,12 @@ namespace App\Controllers\Api;
 
 use App\Libraries\JwtTokenService;
 use App\Models\UserModel;
+use App\Services\AuditContext;
 use App\Services\RapportService;
 use CodeIgniter\Controller;
+use CodeIgniter\HTTP\RequestInterface;
 use CodeIgniter\HTTP\ResponseInterface;
+use Psr\Log\LoggerInterface;
 use Throwable;
 
 /**
@@ -14,6 +17,27 @@ use Throwable;
  */
 abstract class BaseApiController extends Controller
 {
+    protected string $auditRequestId = '';
+    private bool $auditActorContextSet = false;
+
+    public function initController(RequestInterface $request, ResponseInterface $response, LoggerInterface $logger)
+    {
+        parent::initController($request, $response, $logger);
+
+        $this->auditRequestId = bin2hex(random_bytes(16));
+        $metadata = AuditContext::requestMetadata($request);
+        AuditContext::apply(
+            null,
+            null,
+            'API',
+            null,
+            $this->auditRequestId,
+            $metadata['ip_address'],
+            $metadata['user_agent']
+        );
+        $this->response->setHeader('X-Request-ID', $this->auditRequestId);
+    }
+
     /** @return ?\stdClass */
     protected function claims(): ?\stdClass
     {
@@ -47,6 +71,20 @@ abstract class BaseApiController extends Controller
 
         $claims->role = (string) $user['role'];
         $claims->is_super_admin = (bool) $user['is_super_admin'];
+        if (! $this->auditActorContextSet) {
+            $metadata = AuditContext::requestMetadata($this->request);
+            AuditContext::apply(
+                (int) $claims->sub,
+                (int) $claims->tenant_id,
+                'API',
+                null,
+                $this->auditRequestId,
+                $metadata['ip_address'],
+                $metadata['user_agent']
+            );
+            $this->auditActorContextSet = true;
+        }
+
         return $claims;
     }
 

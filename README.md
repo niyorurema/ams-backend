@@ -136,10 +136,17 @@ Les commandes applicatives incluent notamment :
 | `rapports:envoyer-mensuels` | Envoyer les rapports planifiés mensuels |
 | `system:jobs:process-retries` | Traiter jusqu’à 20 demandes de relance approuvées, mises en file par un super-administrateur |
 | `system:jobs:prune-history [jours]` | Purger les exécutions terminées au-delà de 90 jours (minimum : 30 jours) |
+| `audit:install-triggers` | Actualiser les déclencheurs du journal d’audit après l’ajout de tables |
 | `adms:status`, `adms:diagnostic`, `adms:check-ready` | Diagnostiquer la réception ADMS |
 | `pointages:recalculer-journee {date} --tenant=X [--employe=Y]` | Recalculer les projections quotidiennes |
 | `demo:bout-en-bout` | Démonstration opt-in sur le tenant isolé DEMO |
 | `demo:nettoyer [--force]` | Nettoyer les données du tenant DEMO après confirmation |
+
+### Journal d’audit
+
+La migration `CreateAuditLogs` installe des déclencheurs MySQL sur les tables AMS existantes; le compte utilisé pour les migrations doit donc avoir le privilège `TRIGGER`. Ils enregistrent les insertions, modifications et suppressions avec l’acteur authentifié, le tenant, l’objet, les valeurs avant/après, l’adresse IP, le navigateur, l’identifiant de requête et, lorsque disponible, le capteur associé. Les requêtes API exposent aussi cet identifiant dans l’en-tête `X-Request-ID`.
+
+Les colonnes liées aux mots de passe, secrets, jetons, empreintes, données brutes, détails techniques, coordonnées personnelles et contenus sensibles volumineux sont exclues des instantanés. Les administrateurs peuvent consulter les événements de leur tenant via `GET /api/admin/audit-logs`; les super-administrateurs peuvent filtrer tous les tenants. Filtres disponibles : `tenant_id`, `actor_id`, `action`, `object_type`, `object_id`, `device_id`, `request_id`, `date_debut` et `date_fin`. Après l’ajout d’une nouvelle table par migration, exécutez `php spark audit:install-triggers` pour l’inclure dans l’audit.
 
 ### Synchronisation planifiée ETau (tenant OBR)
 

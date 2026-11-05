@@ -27,6 +27,7 @@ $routes->group('api', ['filter' => ['cors','jwt']], static function ($routes): v
 	$routes->get('admin/tenants', 'Api\\AdminTenantsController::index');
 	$routes->get('admin/dashboard/kpis', 'Api\\DashboardController::kpis');
 	$routes->get('admin/system/jobs', 'Api\\SystemJobsController::index');
+	$routes->get('admin/audit-logs', 'Api\\AuditLogsController::index');
 	$routes->post('admin/system/jobs/(:num)/retry', 'Api\\SystemJobsController::retry/$1');
 	$routes->get('admin/tenants/(:num)', 'Api\\AdminTenantsController::show/$1');
 	$routes->post('admin/tenants', 'Api\\AdminTenantsController::create');

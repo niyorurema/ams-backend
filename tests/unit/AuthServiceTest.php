@@ -14,8 +14,8 @@ final class AuthServiceTest extends CIUnitTestCase
             public int $localCalls = 0;
 
             public function __construct() {}
-            public function loginLdap(int $tenantId, string $email, string $password): array { return $this->ldapResult; }
-            public function loginLocal(int $tenantId, string $email, string $password): array
+            public function loginLdap(int $tenantId, string $email, string $password, array $options = []): array { return $this->ldapResult; }
+            public function loginLocal(int $tenantId, string $email, string $password, array $options = []): array
             {
                 $this->localCalls++;
                 return $this->localResult;
@@ -40,8 +40,8 @@ final class AuthServiceTest extends CIUnitTestCase
             public int $localCalls = 0;
 
             public function __construct() {}
-            public function loginLdap(int $tenantId, string $email, string $password): array { return $this->ldapResult; }
-            public function loginLocal(int $tenantId, string $email, string $password): array
+            public function loginLdap(int $tenantId, string $email, string $password, array $options = []): array { return $this->ldapResult; }
+            public function loginLocal(int $tenantId, string $email, string $password, array $options = []): array
             {
                 $this->localCalls++;
                 return ['success' => false];

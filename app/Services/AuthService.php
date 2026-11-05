@@ -33,12 +33,11 @@ class AuthService
     /**
      * Authentifie un utilisateur selon le mode configuré pour le tenant.
      *
-     * @param array<string, mixed> $options Options réservées au contexte appelant.
+     * @param array<string, mixed> $options Contexte HTTP d’audit, sans identifiants secrets.
      * @return array{success:bool,user:?array,token:?string,auth_source:?string,message:?string}
      */
     public function login(int $tenantId, string $email, string $password, array $options = []): array
     {
-        unset($options);
         $email = strtolower(trim($email));
         $tenant = $this->tenantModel->find($tenantId);
         if (! is_array($tenant) || (int) $tenant['is_active'] !== 1) {
@@ -47,9 +46,9 @@ class AuthService
 
         $mode = strtoupper((string) ($tenant['auth_mode'] ?? 'LOCAL'));
         return match ($mode) {
-            'LDAP' => $this->loginLdap($tenantId, $email, $password),
-            'HYBRIDE' => $this->loginHybride($tenantId, $email, $password),
-            default => $this->loginLocal($tenantId, $email, $password),
+            'LDAP' => $this->loginLdap($tenantId, $email, $password, $options),
+            'HYBRIDE' => $this->loginHybride($tenantId, $email, $password, $options),
+            default => $this->loginLocal($tenantId, $email, $password, $options),
         };
     }
 
@@ -57,7 +56,7 @@ class AuthService
      * Authentifie par email lorsque le tenant n'est pas fourni.
      * Les utilisateurs supprimés logiquement sont exclus par UserModel.
      *
-     * @param array<string, mixed> $options Options réservées au contexte appelant.
+     * @param array<string, mixed> $options Contexte HTTP d’audit, sans identifiants secrets.
      * @return array{success:bool,user:?array,token:?string,auth_source:?string,message:?string}
      */
     public function loginParEmail(string $email, string $password, array $options = []): array
@@ -82,18 +81,18 @@ class AuthService
     }
 
     /** @return array{success:bool,user:?array,token:?string,auth_source:?string,message:?string} */
-    public function loginLocal(int $tenantId, string $email, string $password): array
+    public function loginLocal(int $tenantId, string $email, string $password, array $options = []): array
     {
         $user = $this->trouverUtilisateur($tenantId, $email);
         if ($user === null || ! password_verify($password, (string) $user['password_hash'])) {
             $this->logAuth($tenantId, null, $email, 'LOCAL', 'ECHEC_MDP', 'Identifiants locaux invalides.');
             return $this->echec('Identifiants invalides.');
         }
-        return $this->finaliserConnexion($user, 'LOCAL');
+        return $this->finaliserConnexion($user, 'LOCAL', $options);
     }
 
     /** @return array{success:bool,user:?array,token:?string,auth_source:?string,message:?string} */
-    public function loginLdap(int $tenantId, string $email, string $password): array
+    public function loginLdap(int $tenantId, string $email, string $password, array $options = []): array
     {
         try {
             $username = str_contains($email, '@') ? (string) strstr($email, '@', true) : $email;
@@ -108,13 +107,18 @@ class AuthService
                 : null;
             if ($user === null && filter_var($ldapEmail, FILTER_VALIDATE_EMAIL)) {
                 $matricule = trim((string) ($ldapUser['matricule'] ?? ''));
-                $user = $this->lierLecteurEtauApresConnexion($tenantId, $matricule !== '' ? $matricule : $username, $ldapEmail);
+                $user = $this->lierLecteurEtauApresConnexion(
+                    $tenantId,
+                    $matricule !== '' ? $matricule : $username,
+                    $ldapEmail,
+                    $options
+                );
             }
             if ($user === null) {
                 $this->logAuth($tenantId, null, $email, 'LDAP', 'COMPTE_INACTIF', 'Compte LDAP non synchronisé ou inactif.');
                 return $this->echec('Compte utilisateur indisponible.');
             }
-            return $this->finaliserConnexion($user, 'LDAP');
+            return $this->finaliserConnexion($user, 'LDAP', $options);
         } catch (Throwable $exception) {
             $this->logAuth($tenantId, null, $email, 'LDAP', 'ECHEC_LDAP', $exception->getMessage());
             return $this->echec('Service LDAP indisponible.');
@@ -122,10 +126,10 @@ class AuthService
     }
 
     /** @return array{success:bool,user:?array,token:?string,auth_source:?string,message:?string} */
-    protected function loginHybride(int $tenantId, string $email, string $password): array
+    protected function loginHybride(int $tenantId, string $email, string $password, array $options = []): array
     {
-        $ldap = $this->loginLdap($tenantId, $email, $password);
-        return $ldap['success'] ? $ldap : $this->loginLocal($tenantId, $email, $password);
+        $ldap = $this->loginLdap($tenantId, $email, $password, $options);
+        return $ldap['success'] ? $ldap : $this->loginLocal($tenantId, $email, $password, $options);
     }
 
     /**
@@ -156,7 +160,12 @@ class AuthService
      *
      * @return ?array<string, mixed>
      */
-    private function lierLecteurEtauApresConnexion(int $tenantId, string $matricule, string $email): ?array
+    private function lierLecteurEtauApresConnexion(
+        int $tenantId,
+        string $matricule,
+        string $email,
+        array $options = []
+    ): ?array
     {
         if ($tenantId !== 1 || $matricule === '' || mb_strlen($matricule) > 50) {
             return null;
@@ -179,6 +188,7 @@ class AuthService
 
         $userId = (int) $matches[0]['user_id'];
         $employeeId = (int) $matches[0]['employe_id'];
+        $this->appliquerContexteAudit($userId, $tenantId, $options);
         if ($db->table('users')
             ->where('tenant_id', $tenantId)
             ->where('email', $email)
@@ -218,9 +228,10 @@ class AuthService
     }
 
     /** @return array{success:bool,user:?array,token:?string,auth_source:?string,message:?string} */
-    protected function finaliserConnexion(array $user, string $source): array
+    protected function finaliserConnexion(array $user, string $source, array $options = []): array
     {
         try {
+            $this->appliquerContexteAudit((int) $user['id'], (int) $user['tenant_id'], $options);
             $jeton = $this->jwtTokenService->issueForUser($user);
             $this->userModel->update((int) $user['id'], ['derniere_connexion' => date('Y-m-d H:i:s')]);
             $this->logAuth((int) $user['tenant_id'], (int) $user['id'], (string) $user['email'], $source, 'SUCCESS');
@@ -233,6 +244,25 @@ class AuthService
             ]);
             return $this->echec('Impossible de créer le jeton.');
         }
+    }
+
+    /** @param array<string, mixed> $options */
+    private function appliquerContexteAudit(int $actorId, int $tenantId, array $options): void
+    {
+        $requestId = $options['request_id'] ?? null;
+        if (! is_string($requestId) || preg_match('/^[a-f0-9]{32}$/i', $requestId) !== 1) {
+            return;
+        }
+
+        AuditContext::apply(
+            $actorId,
+            $tenantId,
+            'API',
+            null,
+            strtolower($requestId),
+            isset($options['ip']) ? (string) $options['ip'] : null,
+            isset($options['user_agent']) ? (string) $options['user_agent'] : null
+        );
     }
 
     /** @return array{success:false,user:null,token:null,auth_source:null,message:string} */

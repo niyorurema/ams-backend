@@ -19,6 +19,7 @@ final class RealtimeController extends BaseApiController
      */
     public function pointages(): ResponseInterface
     {
+        
         $tenantId = $this->tenantId();
         if ($tenantId === null) {
             return $this->authorizationError();
@@ -29,7 +30,8 @@ final class RealtimeController extends BaseApiController
             $curseur = '$';
         }
 
-        set_time_limit(30);
+        set_time_limit(0);
+        ignore_user_abort(true);
         ini_set('zlib.output_compression', '0');
         header('Content-Type: text/event-stream; charset=utf-8');
         header('Cache-Control: no-cache, no-store, must-revalidate');
