@@ -135,6 +135,7 @@ final class DashboardControllerTest extends CIUnitTestCase
                 'heure_arrivee' => $heureArrivee,
                 'statut_arrivee' => $statutArrivee,
                 'heure_depart' => null,
+                'heures_supplementaires' => $index === 0 ? 2.5 : 0,
                 'statut_global' => $statutGlobal,
                 'details' => '{}',
                 'calcule_le' => $maintenant,
@@ -154,6 +155,9 @@ final class DashboardControllerTest extends CIUnitTestCase
         $this->assertSame(1, $evolutionAujourdhui[0]['retards']);
         $this->assertSame(1, $evolutionAujourdhui[0]['absents']);
         $this->assertSame(1, $evolutionAujourdhui[0]['en_cours']);
+        $this->assertSame(2, $evolutionAujourdhui[0]['sans_pointage_depart']);
+        $this->assertSame(2.5, $evolutionAujourdhui[0]['heures_sup']);
+        $this->assertArrayHasKey('unites_absentes', $evolutionAujourdhui[0]);
     }
 
     public function testCollectionHealthUsesActualCommunicationInsteadOfAdministrativeStatus(): void

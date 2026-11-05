@@ -31,7 +31,7 @@ final class DashboardKpiService
         $debutMoisPrecedent = $maintenant->modify('first day of last month')->format('Y-m-d');
         $finMoisPrecedent = $maintenant->modify('last day of last month')->format('Y-m-d');
 
-        $cacheKey = 'dashboard_kpis_' . $tenantId . '_' . $date . '_presence_v4';
+        $cacheKey = 'dashboard_kpis_' . $tenantId . '_' . $date . '_presence_v5';
         $cached = service('cache')->get($cacheKey);
         if (is_array($cached)) {
             return $cached;
@@ -73,6 +73,7 @@ final class DashboardKpiService
         $employesAttendusParJour = [];
         $presenceInterpreteeParJour = [];
         $unitesAttendues = [];
+        $unitesAttenduesParJour = [];
         $dateCourante = new DateTimeImmutable($debutHistorique);
         $dateFin = new DateTimeImmutable($date);
         while ($dateCourante <= $dateFin) {
@@ -94,6 +95,9 @@ final class DashboardKpiService
                     $journees[$employeId] = $resultat;
                     if ($jour === $date && $uniteParEmploye[$employeId] !== null) {
                         $unitesAttendues[$uniteParEmploye[$employeId]][$employeId] = true;
+                    }
+                    if ($uniteParEmploye[$employeId] !== null) {
+                        $unitesAttenduesParJour[$jour][$uniteParEmploye[$employeId]][$employeId] = true;
                     }
                 }
                 $employesAttendusParJour[$jour] = array_fill_keys($attendus, true);
@@ -119,6 +123,9 @@ final class DashboardKpiService
                             $employesAttendusParJour[$jour][$employeId] = true;
                             if ($jour === $date && $uniteParEmploye[$employeId] !== null) {
                                 $unitesAttendues[$uniteParEmploye[$employeId]][$employeId] = true;
+                            }
+                            if ($uniteParEmploye[$employeId] !== null) {
+                                $unitesAttenduesParJour[$jour][$uniteParEmploye[$employeId]][$employeId] = true;
                             }
                             break;
                         }
@@ -169,6 +176,8 @@ final class DashboardKpiService
                     'retards' => $stats['en_retard'],
                     'absents' => $stats['absents'],
                     'en_cours' => $stats['en_cours'],
+                    'sans_pointage_depart' => $stats['sans_pointage_depart'],
+                    'heures_sup' => $this->heuresSupJour($projections[$jour] ?? []),
                     'total' => count($journeeInterpretee['attendus']),
                 ];
                 $dateCourante = $dateCourante->modify('+1 day');
@@ -212,12 +221,17 @@ final class DashboardKpiService
                 'retards' => $retards,
                 'absents' => max(0, count($attendus) - $presents - $enCours),
                 'en_cours' => $enCours,
+                'sans_pointage_depart' => $stats['sans_pointage_depart'],
+                'heures_sup' => $this->heuresSupJour($projections[$jour] ?? []),
                 'total' => $total,
             ];
             $dateCourante = $dateCourante->modify('+1 day');
         }
 
-        $unitIds = array_keys($unitesAttendues);
+        $unitIds = array_values(array_unique(array_merge(
+            array_keys($unitesAttendues),
+            ...array_map('array_keys', array_values($unitesAttenduesParJour))
+        )));
         $nomsUnites = $unitIds === []
             ? []
             : $this->db->table('unites_organisationnelles')
@@ -249,6 +263,44 @@ final class DashboardKpiService
         usort($topUnites, static fn (array $a, array $b): int =>
             ($b['taux_absence'] <=> $a['taux_absence']) ?: ($b['absents'] <=> $a['absents'])
         );
+        foreach ($evolution as &$jourEvolution) {
+            $jour = (string) $jourEvolution['date'];
+            $jourUnites = [];
+            foreach ($unitesAttenduesParJour[$jour] ?? [] as $uniteId => $employesAttendusUnite) {
+                $employesAttendusIds = array_keys($employesAttendusUnite);
+                $stats = self::calculerPresenceJour(
+                    $employesAttendusIds,
+                    $presenceInterpreteeParJour[$jour]['journees'] ?? $projections[$jour] ?? []
+                );
+                $observesUnite = array_intersect_key(
+                    $pointagesParJour[$jour] ?? [],
+                    array_fill_keys($employesAttendusIds, true)
+                );
+                $presentsUnite = max($stats['presents'], count($observesUnite));
+                $retardsUnite = count(array_filter(
+                    $observesUnite,
+                    static fn (array $pointage): bool => $pointage['retard']
+                ));
+                $absentsUnite = max(
+                    0,
+                    count($employesAttendusIds) - $presentsUnite - $stats['en_cours']
+                );
+                $jourUnites[] = [
+                    'unite_id' => (int) $uniteId,
+                    'absents' => $absentsUnite,
+                    'total' => count($employesAttendusIds),
+                ];
+            }
+            $jourEvolution['unites_absentes'] = $jourUnites;
+        }
+        unset($jourEvolution);
+        foreach ($evolution as &$jourEvolution) {
+            foreach ($jourEvolution['unites_absentes'] as &$uniteEvolution) {
+                $uniteEvolution['unite'] = $nomsParUnite[$uniteEvolution['unite_id']] ?? '';
+            }
+            unset($uniteEvolution);
+        }
+        unset($jourEvolution);
 
         $heuresSup = $this->chargerHeuresSupplementaires(
             $tenantId,
@@ -412,6 +464,15 @@ final class DashboardKpiService
         ];
     }
 
+    /** @param array<int, array<string, mixed>> $projectionsParEmploye */
+    private function heuresSupJour(array $projectionsParEmploye): float
+    {
+        return round(array_sum(array_map(
+            static fn (array $projection): float => (float) ($projection['heures_supplementaires'] ?? 0),
+            $projectionsParEmploye
+        )), 2);
+    }
+
     /**
      * @param list<int> $employeIds
      * @return array<int, list<array{date_debut:string,date_fin:?string,jours_travail:list<int>}>>
@@ -489,7 +550,7 @@ final class DashboardKpiService
     private function chargerProjections(int $tenantId, string $debut, string $fin): array
     {
         $rows = $this->db->table('pointages_journee')
-            ->select('employe_id, date, heure_arrivee, statut_arrivee, heure_depart, statut_global')
+            ->select('employe_id, date, heure_arrivee, statut_arrivee, heure_depart, statut_global, heures_supplementaires')
             ->where('tenant_id', $tenantId)
             ->where('date >=', $debut)
             ->where('date <=', $fin)
