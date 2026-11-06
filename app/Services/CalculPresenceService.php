@@ -65,6 +65,17 @@ class CalculPresenceService
                 ->get()
                 ->getRowArray()
             : null;
+        if ($contexteEmploye !== null && isset($this->db) && $this->db->tableExists('absences')) {
+            $absencesPartielles = array_values(array_filter(
+                (new AbsenceManagementService($this->db))->approvedAbsencesForEmployeeDate(
+                    (int) $contexteEmploye['tenant_id'],
+                    $employeId,
+                    $date
+                ),
+                static fn (array $absence): bool => (int) $absence['journee_complete'] === 0
+            ));
+            $horaire = $this->ajusterHorairePourAbsencesPartielles($horaire, $absencesPartielles);
+        }
         $timezone = $contexteEmploye === null
             ? new DateTimeZone('Africa/Bujumbura')
             : (new TenantTimezoneService($this->db))->forTenant((int) $contexteEmploye['tenant_id']);
@@ -94,6 +105,72 @@ class CalculPresenceService
      * @return array<string, mixed>
      */
     public function interpreterJournee(int $employeId, string $date): array
+    {
+        $this->normaliserDate($date);
+        if ($employeId < 1) {
+            throw new \InvalidArgumentException('Identifiant employé invalide.');
+        }
+
+        $contexte = $this->chargerContexteInterpretation($employeId);
+        if ($contexte === null) {
+            throw new \RuntimeException('Employé introuvable.');
+        }
+
+        $absences = isset($this->db) && $this->db->tableExists('absences')
+            ? (new AbsenceManagementService($this->db))->approvedAbsencesForEmployeeDate(
+                (int) $contexte['tenant_id'],
+                $employeId,
+                $date
+            )
+            : [];
+        $absenceJournee = null;
+        foreach ($absences as $absence) {
+            if ((int) $absence['journee_complete'] === 1) {
+                $absenceJournee = $absence;
+                break;
+            }
+        }
+
+        if ($absenceJournee !== null && ! $this->aDesPointagesPourDate($employeId, $date)) {
+            return $this->ajouterCompatibiliteResultatHistorique(
+                $this->resultatAbsenceAutorisee($contexte, $date, $absenceJournee)
+            );
+        }
+
+        $resultat = $this->interpreterJourneeSansAbsence($employeId, $date);
+        if ($absences !== []) {
+            $resultat['details']['absences_autorisees'] = array_map(
+                static fn (array $absence): array => [
+                    'source' => $absence['source'],
+                    'categorie' => $absence['categorie'],
+                    'journee_complete' => (int) $absence['journee_complete'] === 1,
+                    'duree_heures' => $absence['duree_heures'],
+                    'heure_debut' => $absence['heure_debut'],
+                    'heure_fin' => $absence['heure_fin'],
+                ],
+                $absences
+            );
+            $heuresAbsencePartielle = $this->dureeAbsencesPartielles(array_values(array_filter(
+                $absences,
+                static fn (array $absence): bool => (int) $absence['journee_complete'] === 0
+            )));
+            if ($heuresAbsencePartielle > 0) {
+                $resultat['details']['heures_absence_autorisee'] = $heuresAbsencePartielle;
+            }
+            if ($absenceJournee !== null) {
+                $resultat['details']['conflit_absence_pointage'] = true;
+            }
+        }
+
+        return $resultat;
+    }
+
+    /**
+     * Interprète les règles et horaires sans appliquer les absences autorisées.
+     *
+     * @return array<string, mixed>
+     */
+    private function interpreterJourneeSansAbsence(int $employeId, string $date): array
     {
         $this->normaliserDate($date);
         if ($employeId < 1) {
@@ -153,6 +230,278 @@ class CalculPresenceService
         return $this->ajouterCompatibiliteResultatHistorique(
             $this->calculerJourneeAvecNouvellesRegles($contexte, $date, $creneaux)
         );
+    }
+
+    /** @param array<string, mixed> $contexte
+     *  @param array<string, mixed> $absence
+     *  @return array<string, mixed>
+     */
+    private function resultatAbsenceAutorisee(array $contexte, string $date, array $absence): array
+    {
+        $type = $absence['source'] === 'OBR' ? 'CONGE' : 'EMPECHEMENT';
+
+        return [
+            'tenant_id' => (int) $contexte['tenant_id'],
+            'employe_id' => (int) $contexte['employe_id'],
+            'source_calcul' => 'ABSENCE',
+            'heure_arrivee' => null,
+            'statut_arrivee' => null,
+            'heure_debut_pause' => null,
+            'statut_debut_pause' => null,
+            'heure_fin_pause' => null,
+            'statut_fin_pause' => null,
+            'heure_depart' => null,
+            'statut_depart' => null,
+            'heures_travaillees' => 0.0,
+            'heures_supplementaires' => 0.0,
+            'statut_global' => 'FERIE',
+            'jour_ferie' => false,
+            'absence_autorisee' => true,
+            'details' => [
+                'source' => 'ABSENCE',
+                'date' => $date,
+                'evaluation' => 'ABSENCE_AUTORISEE',
+                'absence_type' => $type,
+                'absence_source' => $absence['source'],
+                'absence_categorie' => $absence['categorie'],
+                'absence_id' => (int) $absence['id'],
+                'creneaux' => [],
+            ],
+        ];
+    }
+
+    private function aDesPointagesPourDate(int $employeId, string $date): bool
+    {
+        if (! isset($this->db) || ! $this->db->tableExists('pointages')) {
+            return false;
+        }
+
+        return $this->db->table('pointages')
+            ->where('employe_id', $employeId)
+            ->where('date_pointage >=', $date . ' 00:00:00')
+            ->where('date_pointage <=', $date . ' 23:59:59')
+            ->where('deleted_at', null)
+            ->countAllResults() > 0;
+    }
+
+    /**
+     * @param array<string, mixed> $horaire
+     * @param array<int, array<string, mixed>> $absences
+     * @return array<string, mixed>
+     */
+    private function ajusterHorairePourAbsencesPartielles(array $horaire, array $absences): array
+    {
+        if (! isset($horaire['plages_horaires']) || ! is_array($horaire['plages_horaires'])) {
+            return $horaire;
+        }
+
+        foreach ($horaire['plages_horaires'] as &$plage) {
+            $type = $this->normaliserType((string) ($plage['type'] ?? ''));
+            if ($type === 'CHECK_IN') {
+                $heure = $this->heureDansAbsencePartielle((string) ($plage['debut'] ?? ''), $absences, 'fin');
+                if ($heure !== null) {
+                    $plage['debut'] = $heure;
+                }
+            } elseif ($type === 'CHECK_OUT') {
+                $heure = $this->heureDansAbsencePartielle((string) ($plage['fin'] ?? ''), $absences, 'debut');
+                if ($heure !== null) {
+                    $plage['fin'] = $heure;
+                }
+            }
+        }
+        unset($plage);
+
+        return $horaire;
+    }
+
+    /**
+     * @param array<string, mixed> $stage
+     * @param array<int, array<string, mixed>> $absences
+     */
+    private function ajusterStagePourAbsencesPartielles(array &$stage, array $absences): void
+    {
+        if ($stage['type'] === 'ARRIVEE') {
+            $heure = $this->heureDansAbsencePartielle((string) ($stage['cible'] ?? ''), $absences, 'fin');
+            if ($heure !== null) {
+                $stage['cible'] = $heure;
+                if ($stage['mode'] === 'PLAGE') {
+                    $stage['debut'] = $heure;
+                    if ($stage['fin'] !== null && $stage['fin'] < $heure) {
+                        $stage['fin'] = $heure;
+                    }
+                }
+            }
+        } elseif ($stage['type'] === 'DEPART') {
+            $heure = $this->heureDansAbsencePartielle((string) ($stage['cible'] ?? ''), $absences, 'debut');
+            if ($heure !== null) {
+                $stage['cible'] = $heure;
+                if ($stage['mode'] === 'PLAGE') {
+                    $stage['fin'] = $heure;
+                    if ($stage['debut'] !== null && $stage['debut'] > $heure) {
+                        $stage['debut'] = $heure;
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $absences
+     */
+    private function heureDansAbsencePartielle(string $heure, array $absences, string $borneRetour): ?string
+    {
+        $minutes = $this->minutesDepuisHeure($heure);
+        if ($minutes === null) {
+            return null;
+        }
+
+        foreach ($absences as $absence) {
+            $debut = $this->minutesDepuisHeure((string) ($absence['heure_debut'] ?? ''));
+            $fin = $this->minutesDepuisHeure((string) ($absence['heure_fin'] ?? ''));
+            if ($debut === null || $fin === null || $debut >= $fin) {
+                continue;
+            }
+            $couvreHeure = $borneRetour === 'debut'
+                ? $minutes >= $debut && $minutes <= $fin
+                : $minutes >= $debut && $minutes < $fin;
+            if ($couvreHeure) {
+                return substr((string) $absence['heure_' . $borneRetour], 0, 5);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $absences
+     */
+    private function dureeAbsencesPartielles(array $absences): float
+    {
+        $total = 0.0;
+        foreach ($absences as $absence) {
+            if (is_numeric($absence['duree_heures'] ?? null)) {
+                $total += max(0.0, (float) $absence['duree_heures']);
+                continue;
+            }
+            $debut = $this->minutesDepuisHeure((string) ($absence['heure_debut'] ?? ''));
+            $fin = $this->minutesDepuisHeure((string) ($absence['heure_fin'] ?? ''));
+            if ($debut !== null && $fin !== null && $fin > $debut) {
+                $total += ($fin - $debut) / 60;
+            }
+        }
+
+        return round($total, 2);
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $absences
+     * @param array<string, mixed> $horaire
+     * @param ?array<string, mixed> $contrat
+     */
+    private function heuresAbsencePartielleDansHoraire(
+        array $absences,
+        array $horaire,
+        ?array $contrat
+    ): float {
+        if ($absences === []) {
+            return 0.0;
+        }
+
+        $debutHoraire = $contrat['heure_debut'] ?? null;
+        $finHoraire = $contrat['heure_fin'] ?? null;
+        $pauseDebut = null;
+        $pauseFin = null;
+        foreach ($horaire['plages_horaires'] ?? [] as $plage) {
+            $type = $this->normaliserType((string) ($plage['type'] ?? ''));
+            if ($type === 'CHECK_IN' && $debutHoraire === null) {
+                $debutHoraire = $plage['debut'] ?? null;
+            } elseif ($type === 'CHECK_OUT' && $finHoraire === null) {
+                $finHoraire = $plage['fin'] ?? null;
+            } elseif ($type === 'BREAK_OUT') {
+                $pauseDebut = $plage['debut'] ?? null;
+            } elseif ($type === 'BREAK_IN') {
+                $pauseFin = $plage['debut'] ?? null;
+            }
+        }
+        $debutHoraire ??= $horaire['heure_debut'] ?? null;
+        $finHoraire ??= $horaire['heure_fin'] ?? null;
+        $debutTravail = $this->minutesDepuisHeure((string) $debutHoraire);
+        $finTravail = $this->minutesDepuisHeure((string) $finHoraire);
+        if ($debutTravail === null || $finTravail === null) {
+            return min($this->dureeAbsencesPartielles($absences), max(0.0, $this->heuresNormalesHoraire($horaire)));
+        }
+        if ($finTravail <= $debutTravail) {
+            $finTravail += 1440;
+        }
+
+        $debutPauseMinutes = $this->minutesDepuisHeure((string) $pauseDebut);
+        $finPauseMinutes = $this->minutesDepuisHeure((string) $pauseFin);
+        if ($debutPauseMinutes !== null && $finPauseMinutes !== null && $finPauseMinutes <= $debutPauseMinutes) {
+            $finPauseMinutes += 1440;
+        }
+
+        $totalMinutes = 0;
+        foreach ($absences as $absence) {
+            $debutAbsence = $this->minutesDepuisHeure((string) ($absence['heure_debut'] ?? ''));
+            $finAbsence = $this->minutesDepuisHeure((string) ($absence['heure_fin'] ?? ''));
+            if ($debutAbsence === null || $finAbsence === null) {
+                continue;
+            }
+            if ($finTravail > 1440 && $finAbsence <= $debutTravail) {
+                $debutAbsence += 1440;
+                $finAbsence += 1440;
+            } elseif ($finAbsence <= $debutAbsence) {
+                $finAbsence += 1440;
+            }
+
+            $debutChevauchement = max($debutTravail, $debutAbsence);
+            $finChevauchement = min($finTravail, $finAbsence);
+            if ($finChevauchement <= $debutChevauchement) {
+                continue;
+            }
+            $minutes = $finChevauchement - $debutChevauchement;
+            if ($debutPauseMinutes !== null && $finPauseMinutes !== null) {
+                $minutesPause = max(
+                    0,
+                    min($finChevauchement, $finPauseMinutes) - max($debutChevauchement, $debutPauseMinutes)
+                );
+                $minutes -= $minutesPause;
+            }
+            $totalMinutes += max(0, $minutes);
+        }
+
+        return round($totalMinutes / 60, 2);
+    }
+
+    /** @param ?array<string, mixed> $contrat */
+    private function heuresNormalesContrat(?array $contrat): float
+    {
+        if ($contrat === null
+            || empty($contrat['heure_debut'])
+            || empty($contrat['heure_fin'])
+        ) {
+            return 0.0;
+        }
+
+        $debut = $this->minutesDepuisHeure((string) $contrat['heure_debut']);
+        $fin = $this->minutesDepuisHeure((string) $contrat['heure_fin']);
+        if ($debut === null || $fin === null) {
+            return 0.0;
+        }
+        if ($fin <= $debut) {
+            $fin += 1440;
+        }
+
+        return ($fin - $debut) / 60;
+    }
+
+    private function minutesDepuisHeure(string $heure): ?int
+    {
+        if (preg_match('/^([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/', $heure, $matches) !== 1) {
+            return null;
+        }
+
+        return (int) $matches[1] * 60 + (int) $matches[2];
     }
 
     /**
@@ -289,9 +638,13 @@ class CalculPresenceService
         $resultat['statut'] = ($resultat['details']['evaluation'] ?? null) === 'AUCUN_JUGEMENT'
             || ($resultat['details']['evaluation'] ?? null) === 'SANS_JUGEMENT'
                 ? 'SANS_JUGEMENT'
-                : (($resultat['details']['evaluation'] ?? null) === 'REPOS'
-                    ? 'REPOS'
-                    : ($statuts[$resultat['statut_global']] ?? 'ANORMAL'));
+                : match ($resultat['details']['evaluation'] ?? null) {
+                    'REPOS' => 'REPOS',
+                    'ABSENCE_AUTORISEE' => ($resultat['details']['absence_type'] ?? null) === 'CONGE'
+                        ? 'CONGE'
+                        : 'EMPECHEMENT',
+                    default => $statuts[$resultat['statut_global']] ?? 'ANORMAL',
+                };
         $resultat['retard_total_minutes'] = 0;
         $resultat['pointages_manquants'] = [];
         $resultat['analyse_plages'] = [];
@@ -659,6 +1012,22 @@ class CalculPresenceService
         }
 
         $horaire = $horaireChoisi['horaire'];
+        $absencesPartielles = isset($this->db) && $this->db->tableExists('absences')
+            ? array_values(array_filter(
+                (new AbsenceManagementService($this->db))->approvedAbsencesForEmployeeDate(
+                    $tenantId,
+                    $employeId,
+                    $date
+                ),
+                static fn (array $absence): bool => (int) $absence['journee_complete'] === 0
+            ))
+            : [];
+        $heuresAbsenceCreditees = $this->heuresAbsencePartielleDansHoraire(
+            $absencesPartielles,
+            $horaire,
+            $horaireChoisi['contrat']
+        );
+        $horaire = $this->ajusterHorairePourAbsencesPartielles($horaire, $absencesPartielles);
         $plagesParType = [];
         foreach ($horaire['plages_horaires'] ?? [] as $plage) {
             $plagesParType[$this->normaliserType((string) ($plage['type'] ?? ''))] = $plage;
@@ -726,6 +1095,10 @@ class CalculPresenceService
                 ),
             ];
         }
+        foreach ($stages as &$stage) {
+            $this->ajusterStagePourAbsencesPartielles($stage, $absencesPartielles);
+        }
+        unset($stage);
 
         $heureLimiteLendemain = null;
         foreach ($stages as $stage) {
@@ -895,11 +1268,18 @@ class CalculPresenceService
             ? $this->calculerHeuresShiftAvecPauses($pointagesUtilises)
             : $this->calculerHeuresAvecHorodatages($pointagesUtilises);
         $heuresNormales = $this->heuresNormalesHoraire($horaire);
+        if ($heuresNormales <= 0 && $absencesPartielles !== []) {
+            $heuresNormales = $this->heuresNormalesContrat($horaireChoisi['contrat']);
+        }
         if ($horaireChoisi['contrat'] !== null
             && in_array($horaireChoisi['contrat']['mode_travail'], ['MI_TEMPS_MATIN', 'MI_TEMPS_APRES_MIDI'], true)
         ) {
             $heuresNormales /= 2;
         }
+        $heuresNormales = max(
+            0.0,
+            $heuresNormales - min($heuresNormales, $heuresAbsenceCreditees)
+        );
         $seuilHeuresSup = (int) $parametres['seuil_heures_sup_minutes'];
         $minutesSup = max(
             0,
@@ -941,6 +1321,9 @@ class CalculPresenceService
                 'pas_arrondi_heures_sup_minutes' => $parametres['pas_arrondi_heures_sup_minutes'],
             ],
         ];
+        if ($absencesPartielles !== []) {
+            $base['details']['heures_absence_prise_en_compte'] = $heuresAbsenceCreditees;
+        }
 
         if ($jourFerie !== null) {
             $base['jour_ferie'] = true;

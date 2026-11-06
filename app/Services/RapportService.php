@@ -246,7 +246,8 @@ class RapportService
         int $userId,
         string $date,
         ?string $dateMandat = null,
-        ?int $uniteScopeId = null
+        ?int $uniteScopeId = null,
+        bool $inclureStatsInternes = false
     ): array
     {
         $contexte = $this->getContexteUtilisateur($userId);
@@ -262,6 +263,11 @@ class RapportService
             'retards' => 0,
             'anormaux' => 0,
             'feries' => 0,
+            'conges' => 0,
+            'empechements' => 0,
+            'absences_autorisees' => 0,
+            'absences_partielles' => 0,
+            'conflits_absence_pointage' => 0,
             'repos' => 0,
             'sans_jugement' => 0,
             'heures_totales' => 0.0,
@@ -272,7 +278,7 @@ class RapportService
             $analyse = $calcul['analyse_plages'];
             $sansJugement = in_array(
                 $calcul['details']['evaluation'] ?? null,
-                ['AUCUN_JUGEMENT', 'SANS_JUGEMENT'],
+                ['AUCUN_JUGEMENT', 'SANS_JUGEMENT', 'ABSENCE_AUTORISEE'],
                 true
             );
             if (! $sansJugement && (empty($calcul['jour_ferie']) || ! empty($calcul['ferie_travail']))) {
@@ -304,6 +310,8 @@ class RapportService
                 'statut' => $calcul['statut'],
                 'jour_ferie' => (bool) ($calcul['jour_ferie'] ?? false),
                 'jour_ferie_nom' => $calcul['jour_ferie_nom'] ?? null,
+                'absences_autorisees' => $calcul['details']['absences_autorisees'] ?? [],
+                'conflit_absence_pointage' => (bool) ($calcul['details']['conflit_absence_pointage'] ?? false),
                 'prime_potentielle' => (bool) ($calcul['prime_potentielle'] ?? false),
                 'nb_pointages' => count(array_filter($analyse, static fn (array $plage): bool => $plage['reel'] !== null)),
                 'horaire_nom' => $calcul['horaire_nom'] ?? $calcul['details']['horaire_nom'] ?? null,
@@ -331,6 +339,33 @@ class RapportService
             if (! empty($calcul['jour_ferie'])) {
                 $stats['feries']++;
             }
+            $absencesAutorisees = $calcul['details']['absences_autorisees'] ?? [];
+            if (! empty($calcul['absence_autorisee'])) {
+                $absencesAutorisees[] = [
+                    'source' => $calcul['details']['absence_source'] ?? null,
+                    'journee_complete' => true,
+                ];
+            }
+            if ($absencesAutorisees !== []) {
+                $stats['absences_autorisees']++;
+                if (array_filter(
+                    $absencesAutorisees,
+                    static fn (array $absence): bool => ($absence['source'] ?? null) === 'OBR'
+                ) !== []) {
+                    $stats['conges']++;
+                } else {
+                    $stats['empechements']++;
+                }
+                if (array_filter(
+                    $absencesAutorisees,
+                    static fn (array $absence): bool => empty($absence['journee_complete'])
+                ) !== []) {
+                    $stats['absences_partielles']++;
+                }
+            }
+            if (! empty($calcul['details']['conflit_absence_pointage'])) {
+                $stats['conflits_absence_pointage']++;
+            }
             if ($sansJugement) {
                 $stats['sans_jugement']++;
             } else {
@@ -349,6 +384,9 @@ class RapportService
             }
         }
         $stats['heures_totales'] = round($stats['heures_totales'], 2);
+        if ($inclureStatsInternes) {
+            $stats['employes_planifies'] = $employesPlanifies;
+        }
         $stats['moyenne_heures'] = $employesPlanifies <= 0
             ? 0.0
             : round($stats['heures_totales'] / $employesPlanifies, 2);
@@ -367,6 +405,136 @@ class RapportService
             'details' => $details,
             'alertes' => $alertes,
         ];
+    }
+
+    /**
+     * Builds a period report by aggregating the daily attendance interpretation.
+     *
+     * @return array<string, mixed>
+     */
+    public function genererRapportPeriode(
+        int $userId,
+        string $dateDebut,
+        string $dateFin,
+        ?int $uniteScopeId = null,
+        string $type = 'PERIODE'
+    ): array {
+        if (! $this->dateRapportValide($dateDebut)
+            || ! $this->dateRapportValide($dateFin)
+            || $dateDebut > $dateFin
+        ) {
+            throw new \InvalidArgumentException('Période de rapport invalide.');
+        }
+
+        $date = new \DateTimeImmutable($dateDebut);
+        $fin = new \DateTimeImmutable($dateFin);
+        $details = [];
+        $alertes = [];
+        $matricules = [];
+        $stats = [
+            'total_employes' => 0,
+            'jours_employes' => 0,
+            'employes_planifies' => 0,
+            'presents' => 0,
+            'absents' => 0,
+            'normaux' => 0,
+            'retards' => 0,
+            'anormaux' => 0,
+            'feries' => 0,
+            'conges' => 0,
+            'empechements' => 0,
+            'absences_autorisees' => 0,
+            'absences_partielles' => 0,
+            'conflits_absence_pointage' => 0,
+            'repos' => 0,
+            'sans_jugement' => 0,
+            'heures_totales' => 0.0,
+        ];
+        $sommeStats = [
+            'employes_planifies',
+            'presents',
+            'absents',
+            'normaux',
+            'retards',
+            'anormaux',
+            'feries',
+            'conges',
+            'empechements',
+            'absences_autorisees',
+            'absences_partielles',
+            'conflits_absence_pointage',
+            'repos',
+            'sans_jugement',
+        ];
+
+        while ($date <= $fin) {
+            $dateJour = $date->format('Y-m-d');
+            $rapportJour = $this->genererRapportQuotidien(
+                $userId,
+                $dateJour,
+                $dateJour,
+                $uniteScopeId,
+                true
+            );
+            foreach ($sommeStats as $cle) {
+                $stats[$cle] += (int) ($rapportJour['stats'][$cle] ?? 0);
+            }
+            $stats['jours_employes'] += (int) ($rapportJour['stats']['total_employes'] ?? 0);
+            $stats['heures_totales'] += (float) ($rapportJour['stats']['heures_totales'] ?? 0);
+
+            foreach ($rapportJour['details'] as $detail) {
+                $details[] = [...$detail, 'date' => $dateJour];
+                $identite = trim((string) ($detail['matricule'] ?? ''));
+                if ($identite === '') {
+                    $identite = trim((string) ($detail['nom'] ?? '') . ' ' . (string) ($detail['prenom'] ?? ''));
+                }
+                if ($identite !== '') {
+                    $matricules[$identite] = true;
+                }
+            }
+            foreach ($rapportJour['alertes'] as $alerte) {
+                $alertes[] = $dateJour . ' : ' . $alerte;
+            }
+            $date = $date->modify('+1 day');
+        }
+
+        $dernierRapport = $rapportJour;
+        $stats['total_employes'] = count($matricules);
+        $stats['heures_totales'] = round($stats['heures_totales'], 2);
+        $stats['moyenne_heures'] = $stats['employes_planifies'] === 0
+            ? 0.0
+            : round($stats['heures_totales'] / $stats['employes_planifies'], 2);
+        $employesComptabilises = $stats['presents'] + $stats['absents'];
+        $stats['taux_presence'] = $employesComptabilises === 0
+            ? 0.0
+            : round($stats['presents'] * 100 / $employesComptabilises, 2);
+
+        return [
+            ...$dernierRapport,
+            'titre' => 'Rapport de présence du ' . date('d/m/Y', strtotime($dateDebut))
+                . ' au ' . date('d/m/Y', strtotime($dateFin)),
+            'date' => $dateFin,
+            'periode' => ['type' => $type, 'debut' => $dateDebut, 'fin' => $dateFin],
+            'stats' => $stats,
+            'details' => $details,
+            'alertes' => $alertes,
+        ];
+    }
+
+    /** @return array{debut:string,fin:string} */
+    public static function bornesPeriodePlanifiee(string $type, \DateTimeImmutable $reference): array
+    {
+        if ($type === 'HEBDOMADAIRE') {
+            $debut = $reference->modify('monday this week')->modify('-7 days');
+            $fin = $debut->modify('+6 days');
+        } elseif ($type === 'MENSUEL') {
+            $debut = $reference->modify('first day of this month')->modify('-1 month');
+            $fin = $reference->modify('first day of this month')->modify('-1 day');
+        } else {
+            throw new \InvalidArgumentException('Type de période de rapport invalide.');
+        }
+
+        return ['debut' => $debut->format('Y-m-d'), 'fin' => $fin->format('Y-m-d')];
     }
 
     /** Génère un PDF paysage et retourne son chemin temporaire. */
@@ -398,8 +566,14 @@ class RapportService
         $synthese = $classeur->getActiveSheet();
         $synthese->setTitle('Synthèse');
         $this->setTexte($synthese, 'A1', (string) ($rapport['titre'] ?? 'Rapport de présence'));
-        $this->setTexte($synthese, 'A2', 'Date');
-        $this->setTexte($synthese, 'B2', (string) ($rapport['date'] ?? ''));
+        $this->setTexte($synthese, 'A2', isset($rapport['periode']) ? 'Période' : 'Date');
+        $this->setTexte(
+            $synthese,
+            'B2',
+            isset($rapport['periode'])
+                ? (string) $rapport['periode']['debut'] . ' – ' . (string) $rapport['periode']['fin']
+                : (string) ($rapport['date'] ?? '')
+        );
         $this->setTexte($synthese, 'A4', 'Indicateur');
         $this->setTexte($synthese, 'B4', 'Valeur');
 
@@ -417,11 +591,24 @@ class RapportService
             'heures_totales' => 'Heures totales',
             'moyenne_heures' => 'Moyenne heures/jour',
             'taux_presence' => 'Taux de présence',
+            'conges' => 'Congés confirmés',
+            'empechements' => 'Empêchements validés',
+            'absences_autorisees' => 'Absences autorisées',
+            'absences_partielles' => 'Absences partielles',
+            'conflits_absence_pointage' => 'Pointages pendant une absence',
         ];
+        if (isset($rapport['periode'])) {
+            $libelles['moyenne_heures'] = 'Moyenne heures/journée-employé';
+        }
         $ligne = 5;
         foreach ($libelles as $cle => $libelle) {
             $this->setTexte($synthese, 'A' . $ligne, $libelle);
             $this->setNombre($synthese, 'B' . $ligne, (float) ($statistiques[$cle] ?? 0));
+            $ligne++;
+        }
+        if (isset($rapport['periode'])) {
+            $this->setTexte($synthese, 'A' . $ligne, 'Journées-employés');
+            $this->setNombre($synthese, 'B' . $ligne, (int) ($statistiques['jours_employes'] ?? 0));
             $ligne++;
         }
         $this->styliserEntete($synthese, 'A4:B4');
@@ -457,7 +644,7 @@ class RapportService
 
         foreach (($rapport['details'] ?? []) as $index => $detail) {
             $ligne = $index + 2;
-            $this->setTexte($details, 'A' . $ligne, (string) ($rapport['date'] ?? ''));
+            $this->setTexte($details, 'A' . $ligne, (string) ($detail['date'] ?? $rapport['date'] ?? ''));
             foreach (['matricule', 'nom', 'prenom', 'unite'] as $colonne => $cle) {
                 $this->setTexte($details, Coordinate::stringFromColumnIndex($colonne + 2) . $ligne, (string) ($detail[$cle] ?? ''));
             }
@@ -609,7 +796,7 @@ class RapportService
             $mail->setFrom((string) $smtp['from_email'], (string) $smtp['from_name']);
             $mail->addAddress((string) $user['email'], (string) $user['nom_complet']);
             $mail->isHTML(true);
-            $mail->Subject = $this->sujetRapport((string) ($rapport['date'] ?? ''), $langue);
+            $mail->Subject = $this->sujetRapport($rapport, $langue);
             $mail->Body = view('rapports/email', ['rapport' => $rapport, 'langue' => $langue]);
             $mail->AltBody = (string) ($rapport['titre'] ?? 'Rapport de présence');
             $mail->addAttachment($fichier, basename($fichier));
@@ -649,8 +836,12 @@ class RapportService
         return true;
     }
 
-    private function sujetRapport(string $date, string $langue): string
+    private function sujetRapport(array $rapport, string $langue): string
     {
+        $date = isset($rapport['periode'])
+            ? (string) $rapport['periode']['debut'] . ' – ' . (string) $rapport['periode']['fin']
+            : (string) ($rapport['date'] ?? '');
+
         return match ($langue) {
             'en' => 'Attendance report for ' . $date,
             'rn' => 'Raporo y’ivyashikiye ku ' . $date,
@@ -822,40 +1013,53 @@ class RapportService
         if ($type === 'QUOTIDIEN') {
             return $this->envoyerRapportsQuotidiens();
         }
-
-        $dateAujourdhui = date('Y-m-d');
-        $heureActuelle = date('H:i:s');
-
-        $requete = $this->db->table('rapports_planifies')
-            ->where('actif', 1)
-            ->where('type', $type);
-        if ($type !== 'QUOTIDIEN') {
-            $requete->where('heure_envoi <=', $heureActuelle);
+        if (! in_array($type, ['HEBDOMADAIRE', 'MENSUEL'], true)) {
+            throw new \InvalidArgumentException('Type de rapport planifié invalide.');
         }
-        $planifications = $requete->get()->getResultArray();
+
+        $planifications = $this->db->table('rapports_planifies')
+            ->where('actif', 1)
+            ->where('type', $type)
+            ->get()
+            ->getResultArray();
 
         $result = ['traite' => 0, 'envoyes' => 0, 'ignores' => 0, 'erreurs' => 0];
 
         foreach ($planifications as $planification) {
-            $dateRapport = $dateAujourdhui;
-            if ($type === 'QUOTIDIEN') {
-                $tenantId = (int) $planification['tenant_id'];
-                $maintenant = (new TenantTimezoneService($this->db))->now($tenantId);
-                if ((string) $planification['heure_envoi'] > $maintenant->format('H:i:s')) {
-                    continue;
-                }
-                $dateAujourdhuiTenant = $maintenant->format('Y-m-d');
-                $dateRapport = $maintenant->modify('-1 day')->format('Y-m-d');
-                if (! (new JourTravailleService())->estTravaille($tenantId, $dateAujourdhuiTenant)) {
-                    $result['ignores']++;
-                    continue;
-                }
-                $jourFerie = (new JourFerieService())->getJourFerie($tenantId, $dateRapport);
-                if ($jourFerie !== null) {
-                    $result['ignores']++;
-                    continue;
-                }
+            $tenantId = (int) $planification['tenant_id'];
+            $maintenant = (new TenantTimezoneService($this->db))->now($tenantId);
+            if ((string) $planification['heure_envoi'] > $maintenant->format('H:i:s')) {
+                continue;
             }
+
+            if ($type === 'HEBDOMADAIRE') {
+                $joursSemaine = trim((string) ($planification['jours_semaine'] ?? ''));
+                $joursSemaineParts = $joursSemaine === ''
+                    ? []
+                    : (preg_split('/\s*,\s*/', $joursSemaine) ?: []);
+                $joursInvalides = array_filter(
+                    $joursSemaineParts,
+                    static fn (string $jour): bool => preg_match('/^[1-7]$/', $jour) !== 1
+                );
+                if ($joursInvalides !== []) {
+                    log_message('error', 'Jours de semaine invalides pour le rapport planifié {planification}.', [
+                        'planification' => (int) $planification['id'],
+                    ]);
+                    $result['erreurs']++;
+                    continue;
+                }
+                $joursAutorises = $joursSemaine === ''
+                    ? [1, 2, 3, 4, 5]
+                    : array_map('intval', $joursSemaineParts);
+                if (! in_array((int) $maintenant->format('N'), $joursAutorises, true)) {
+                    continue;
+                }
+            } elseif ($maintenant->format('j') !== '1') {
+                continue;
+            }
+
+            $bornes = self::bornesPeriodePlanifiee($type, $maintenant);
+            $dateRapport = $bornes['fin'];
             $result['traite']++;
 
             $dejaEnvoyeQuery = $this->db->table('rapports_envoyes')
@@ -879,7 +1083,7 @@ class RapportService
             }
 
             try {
-                $this->envoyerRapportPlanifie($planification, $dateRapport);
+                $this->envoyerRapportPlanifie($planification, $dateRapport, $bornes['debut']);
                 $result['envoyes']++;
             } catch (\Throwable $e) {
                 log_message('error', 'Échec du rapport planifié {planification} : {error}', [
@@ -899,13 +1103,30 @@ class RapportService
      * @param array<string, mixed> $planification
      * @return array<string, mixed>
      */
-    protected function envoyerRapportPlanifie(array $planification, string $dateRapport): array
+    protected function envoyerRapportPlanifie(
+        array $planification,
+        string $dateRapport,
+        ?string $dateDebut = null
+    ): array
     {
-        $rapport = $this->preparerRapportPourDestinataire(
-            ['user_id' => (int) $planification['user_id'], 'unite_id' => null],
-            $dateRapport,
-            $dateRapport
-        );
+        if (in_array($planification['type'] ?? null, ['HEBDOMADAIRE', 'MENSUEL'], true)) {
+            if ($dateDebut === null || ! $this->dateRapportValide($dateDebut)) {
+                throw new \InvalidArgumentException('Date de début du rapport périodique invalide.');
+            }
+            $rapport = $this->genererRapportPeriode(
+                (int) $planification['user_id'],
+                $dateDebut,
+                $dateRapport,
+                isset($planification['perimetre_unite_id']) ? (int) $planification['perimetre_unite_id'] : null,
+                (string) $planification['type']
+            );
+        } else {
+            $rapport = $this->preparerRapportPourDestinataire(
+                ['user_id' => (int) $planification['user_id'], 'unite_id' => null],
+                $dateRapport,
+                $dateRapport
+            );
+        }
         if (! $this->envoyerEmail(
             (int) $planification['user_id'],
             $rapport,

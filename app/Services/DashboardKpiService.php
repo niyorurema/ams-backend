@@ -31,7 +31,7 @@ final class DashboardKpiService
         $debutMoisPrecedent = $maintenant->modify('first day of last month')->format('Y-m-d');
         $finMoisPrecedent = $maintenant->modify('last day of last month')->format('Y-m-d');
 
-        $cacheKey = 'dashboard_kpis_' . $tenantId . '_' . $date . '_presence_v5';
+        $cacheKey = 'dashboard_kpis_' . $tenantId . '_' . $date . '_presence_v6';
         $cached = service('cache')->get($cacheKey);
         if (is_array($cached)) {
             return $cached;
@@ -67,6 +67,7 @@ final class DashboardKpiService
         $joursFeries = $this->chargerJoursFeries($tenantId, $debutHistorique, $date);
         $projections = $this->chargerProjections($tenantId, $debutHistorique, $date);
         $pointagesParJour = $this->chargerPointagesParJour($tenantId, $debutHistorique, $date);
+        $absencesApprouvees = $this->chargerAbsencesApprouvees($tenantId, $debutHistorique, $date);
         // The dashboard uses cached projections; live per-employee interpretation belongs to explicit daily views.
         $interpretateur = null;
 
@@ -119,6 +120,11 @@ final class DashboardKpiService
                                 || ! in_array($jourSemaine, $contrat['jours_travail'], true)
                             ) {
                                 continue;
+                            }
+                            if (isset($absencesApprouvees[$jour][$employeId])
+                                && ! isset($pointagesParJour[$jour][$employeId])
+                            ) {
+                                break;
                             }
                             $employesAttendusParJour[$jour][$employeId] = true;
                             if ($jour === $date && $uniteParEmploye[$employeId] !== null) {
@@ -346,6 +352,7 @@ final class DashboardKpiService
         $etatSanteCollecte = $capteursHorsLigne > 0 || $pointagesNonAssocies > 0
             ? 'ATTENTION'
             : ($capteursInconnus > 0 || $capteurs === [] ? 'UNKNOWN' : 'OK');
+        $absencesDuJour = $this->chargerAbsencesDuJour($tenantId, $date);
 
         $hier = $maintenant->modify('-1 day')->format('Y-m-d');
         $comparaisonHier = null;
@@ -409,6 +416,7 @@ final class DashboardKpiService
                 'pointages_non_associes' => $pointagesNonAssocies,
             ],
             'heures_sup' => $heuresSup,
+            'absences' => $absencesDuJour,
             'alertes' => $alertes,
             'top_unites_absentes' => array_slice($topUnites, 0, 3),
             'evolution_presence' => $evolution,
@@ -562,6 +570,77 @@ final class DashboardKpiService
         }
 
         return $projections;
+    }
+
+    /**
+     * @return array<string, array<int, true>>
+     */
+    private function chargerAbsencesApprouvees(int $tenantId, string $debut, string $fin): array
+    {
+        if (! $this->db->tableExists('absences')) {
+            return [];
+        }
+
+        $rows = $this->db->table('absences')
+            ->select('employe_id, date_debut, date_fin')
+            ->where('tenant_id', $tenantId)
+            ->where('statut', 'APPROVED')
+            ->where('journee_complete', 1)
+            ->where('date_debut <=', $fin)
+            ->where('date_fin >=', $debut)
+            ->get()
+            ->getResultArray();
+        $result = [];
+        foreach ($rows as $row) {
+            $dateCourante = new DateTimeImmutable(max($debut, (string) $row['date_debut']));
+            $dateFinAbsence = new DateTimeImmutable(min($fin, (string) $row['date_fin']));
+            while ($dateCourante <= $dateFinAbsence) {
+                $result[$dateCourante->format('Y-m-d')][(int) $row['employe_id']] = true;
+                $dateCourante = $dateCourante->modify('+1 day');
+            }
+        }
+
+        return $result;
+    }
+
+    /** @return array{conges_confirmes:int,empechements_confirmes:int,empechements_en_attente:int} */
+    private function chargerAbsencesDuJour(int $tenantId, string $date): array
+    {
+        $resultat = [
+            'conges_confirmes' => 0,
+            'empechements_confirmes' => 0,
+            'empechements_en_attente' => 0,
+        ];
+        if (! $this->db->tableExists('absences')) {
+            return $resultat;
+        }
+
+        $rows = $this->db->table('absences')
+            ->select('source, statut, employe_id')
+            ->where('tenant_id', $tenantId)
+            ->where('date_debut <=', $date)
+            ->where('date_fin >=', $date)
+            ->whereIn('statut', ['APPROVED', 'PENDING', 'MANAGER_APPROVED'])
+            ->get()
+            ->getResultArray();
+        $conges = [];
+        $empechements = [];
+        $attente = [];
+        foreach ($rows as $row) {
+            $employeId = (int) $row['employe_id'];
+            if ($row['source'] === 'OBR' && $row['statut'] === 'APPROVED') {
+                $conges[$employeId] = true;
+            } elseif ($row['source'] === 'AMS' && $row['statut'] === 'APPROVED') {
+                $empechements[$employeId] = true;
+            } elseif ($row['source'] === 'AMS') {
+                $attente[$employeId] = true;
+            }
+        }
+        $resultat['conges_confirmes'] = count($conges);
+        $resultat['empechements_confirmes'] = count($empechements);
+        $resultat['empechements_en_attente'] = count($attente);
+
+        return $resultat;
     }
 
     /**

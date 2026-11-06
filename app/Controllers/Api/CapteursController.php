@@ -63,6 +63,13 @@ class CapteursController extends BaseApiController
             }
             $this->appliquerFiltreStatut($query, $statuts);
         }
+        $etatConnexion = $this->request->getGet('etat_connexion');
+        if ($etatConnexion !== null && $etatConnexion !== '') {
+            if (! in_array($etatConnexion, ['ONLINE', 'OFFLINE', 'UNKNOWN', 'INACTIVE'], true)) {
+                return $this->errorResponse('Filtre de connexion invalide.', 400);
+            }
+            $this->appliquerFiltreEtatConnexion($query, (string) $etatConnexion);
+        }
         $countQuery = (new CapteurModel())->where('tenant_id', $tenantId);
         if ($search !== '') {
             $countQuery->groupStart()
@@ -73,6 +80,9 @@ class CapteursController extends BaseApiController
         }
         if ($statuts !== null && $statuts !== '') {
             $this->appliquerFiltreStatut($countQuery, $statuts);
+        }
+        if ($etatConnexion !== null && $etatConnexion !== '') {
+            $this->appliquerFiltreEtatConnexion($countQuery, (string) $etatConnexion);
         }
         $total = $countQuery->countAllResults();
         $capteurs = array_map(
@@ -393,5 +403,53 @@ class CapteursController extends BaseApiController
             $query->groupEnd();
         }
         $query->groupEnd();
+    }
+
+    private function appliquerFiltreEtatConnexion(object $query, string $etat): void
+    {
+        if ($etat === 'INACTIVE') {
+            $query->where('statut', 'INACTIF');
+            return;
+        }
+        $query->where('statut', 'ACTIF');
+
+        if ($etat === 'UNKNOWN') {
+            $query->groupStart()
+                ->where('derniere_communication', null)
+                ->orGroupStart()
+                    ->where('source_derniere_communication', 'ADMS')
+                    ->groupStart()
+                        ->where('frequence_adms_secondes', null)
+                        ->orWhere('frequence_adms_secondes <', 1)
+                    ->groupEnd()
+                ->groupEnd()
+                ->orGroupStart()
+                    ->where('source_derniere_communication', 'SERVER_POLL')
+                    ->groupStart()
+                        ->where('frequence_polling_secondes', null)
+                        ->orWhere('frequence_polling_secondes <', 1)
+                    ->groupEnd()
+                ->groupEnd()
+                ->orWhere('source_derniere_communication', null)
+                ->orWhereNotIn('source_derniere_communication', ['ADMS', 'SERVER_POLL'])
+            ->groupEnd();
+            return;
+        }
+
+        $comparison = $etat === 'ONLINE' ? '<=' : '>';
+        $query->groupStart()
+            ->groupStart()
+                ->where('source_derniere_communication', 'ADMS')
+                ->where('frequence_adms_secondes >', 0)
+                ->where('derniere_communication IS NOT NULL', null, false)
+                ->where("TIMESTAMPDIFF(SECOND, derniere_communication, NOW()) {$comparison} frequence_adms_secondes * 3", null, false)
+            ->groupEnd()
+            ->orGroupStart()
+                ->where('source_derniere_communication', 'SERVER_POLL')
+                ->where('frequence_polling_secondes >', 0)
+                ->where('derniere_communication IS NOT NULL', null, false)
+                ->where("TIMESTAMPDIFF(SECOND, derniere_communication, NOW()) {$comparison} frequence_polling_secondes * 3", null, false)
+            ->groupEnd()
+            ->groupEnd();
     }
 }

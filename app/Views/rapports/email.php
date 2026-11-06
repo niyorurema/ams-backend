@@ -14,11 +14,22 @@
             </tr>
         </thead>
         <tbody>
+            <?php if (isset($rapport['periode'])): ?>
+                <tr>
+                    <td style="border-bottom: 1px solid #d5ddda;">Journées-employés</td>
+                    <td align="right" style="border-bottom: 1px solid #d5ddda;"><?= esc((string) ($rapport['stats']['jours_employes'] ?? 0)) ?></td>
+                </tr>
+            <?php endif; ?>
             <?php foreach ([
                 'Total employés' => 'total_employes',
                 'Présents' => 'presents',
                 'Absents' => 'absents',
                 'Jours fériés' => 'feries',
+                'Congés confirmés' => 'conges',
+                'Empêchements validés' => 'empechements',
+                'Absences autorisées' => 'absences_autorisees',
+                'Absences partielles' => 'absences_partielles',
+                'Pointages pendant une absence' => 'conflits_absence_pointage',
                 'Jours de repos' => 'repos',
                 'Normaux' => 'normaux',
                 'Retards' => 'retards',

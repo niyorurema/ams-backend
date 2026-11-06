@@ -95,6 +95,48 @@ final class DashboardControllerTest extends CIUnitTestCase
         $this->assertSame(0, $stats['presents']);
     }
 
+    public function testCongeObrConfirmeEstExcluDesEmployesAttendusEtExposeDansLesKpis(): void
+    {
+        $date = (new DateTimeImmutable('now', new \DateTimeZone('Africa/Bujumbura')))->format('Y-m-d');
+        $jour = (int) (new DateTimeImmutable($date))->format('N');
+        $now = date('Y-m-d H:i:s');
+        $this->attendanceDb->table('employe_contrats_horaire')->insert([
+            'tenant_id' => $this->tenantId,
+            'employe_id' => $this->employeId,
+            'mode_travail' => 'TEMPS_PLEIN',
+            'heure_debut' => '07:30:00',
+            'heure_fin' => '17:30:00',
+            'jours_travail' => json_encode([$jour], JSON_THROW_ON_ERROR),
+            'date_debut' => $date,
+            'date_fin' => null,
+            'actif' => 1,
+            'created_at' => $now,
+        ]);
+        $this->attendanceDb->table('absences')->insert([
+            'tenant_id' => $this->tenantId,
+            'employe_id' => $this->employeId,
+            'source' => 'OBR',
+            'source_request_id' => 'OBR-DASHBOARD-TEST',
+            'source_status_code' => '60',
+            'source_status_label' => 'Approbation finale',
+            'source_type_code' => 'AL',
+            'source_day_type' => 'W',
+            'categorie' => 'Congé annuel',
+            'date_debut' => $date,
+            'date_fin' => $date,
+            'journee_complete' => 1,
+            'duree_heures' => 8,
+            'statut' => 'APPROVED',
+            'created_at' => $now,
+        ]);
+
+        $kpis = (new DashboardKpiService($this->attendanceDb))->getPourTenant($this->tenantId);
+
+        $this->assertSame(0, $kpis['employes']['attendus_aujourdhui']);
+        $this->assertSame(0, $kpis['employes']['absents']);
+        $this->assertSame(1, $kpis['absences']['conges_confirmes']);
+    }
+
     public function testDashboardProvidesAllFourAttendanceSeries(): void
     {
         $date = (new DateTimeImmutable('now', new \DateTimeZone('Africa/Bujumbura')))->format('Y-m-d');

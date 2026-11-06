@@ -106,6 +106,14 @@ class PointagesController extends BaseApiController
             $query->where('p.type_evenement', $typeEvenement);
         }
 
+        $statutCalcul = $this->request->getGet('statut_calcul');
+        if ($statutCalcul !== null && $statutCalcul !== '') {
+            if (! in_array($statutCalcul, ['VALIDE', 'RETARD', 'ANORMAL', 'UNKNOWN'], true)) {
+                return $this->errorResponse('Statut calculé invalide.', 400);
+            }
+            $query->where('p.statut_calcul', $statutCalcul);
+        }
+
         if ($dateDebut !== '') {
             $query->where('p.date_pointage >=', $dateDebut . ' 00:00:00');
         }
@@ -501,6 +509,10 @@ class PointagesController extends BaseApiController
         if ($typeEvenement !== null && ! in_array($typeEvenement, ['CHECK_IN', 'CHECK_OUT', 'BREAK_IN', 'BREAK_OUT', 'UNKNOWN'], true)) {
             return $this->errorResponse('Type de pointage invalide.', 400);
         }
+        $statutCalcul = $this->request->getGet('statut_calcul');
+        if ($statutCalcul !== null && ! in_array($statutCalcul, ['VALIDE', 'RETARD', 'ANORMAL', 'UNKNOWN'], true)) {
+            return $this->errorResponse('Statut calculé invalide.', 400);
+        }
         $statut = $this->request->getGet('statut');
         if ($statut !== null && ! in_array($statut, ['VALIDE', 'INVALIDE', 'REJETE', 'SUPPRIME'], true)) {
             return $this->errorResponse('Statut de pointage invalide.', 400);
@@ -554,6 +566,9 @@ class PointagesController extends BaseApiController
         }
         if ($typeEvenement !== null) {
             $builder->where('p.type_evenement', $typeEvenement);
+        }
+        if ($statutCalcul !== null) {
+            $builder->where('p.statut_calcul', $statutCalcul);
         }
         if ($statut !== null) {
             $builder->where('p.statut', $statut);

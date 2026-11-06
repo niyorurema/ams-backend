@@ -19,7 +19,6 @@ final class RealtimeController extends BaseApiController
      */
     public function pointages(): ResponseInterface
     {
-        
         $tenantId = $this->tenantId();
         if ($tenantId === null) {
             return $this->authorizationError();
@@ -60,10 +59,6 @@ final class RealtimeController extends BaseApiController
                 foreach ($evenements as $evenement) {
                     $curseur = $evenement['id'];
                     $payload = $realtime->enrichirEvenementPointage($evenement['payload'], $tenantId);
-                    log_message('info', '[SSE] Événement lu tenant_id={tenantId} stream_id={streamId}', [
-                        'tenantId' => $tenantId,
-                        'streamId' => $curseur,
-                    ]);
                     echo 'id: ' . $evenement['id'] . "\n";
                     echo 'data: ' . json_encode(
                         $payload,
@@ -83,8 +78,7 @@ final class RealtimeController extends BaseApiController
                 }
             }
         } catch (Throwable $exception) {
-            log_message('error', 'Flux temps réel du tenant #{tenant} interrompu : {message}', [
-                'tenant' => $tenantId,
+            log_message('error', 'Flux temps réel interrompu : {message}', [
                 'message' => $exception->getMessage(),
             ]);
             echo "event: error\ndata: {\"message\":\"Flux temps réel indisponible.\"}\n\n";

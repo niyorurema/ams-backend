@@ -188,6 +188,23 @@ Un pointage manuel pour autrui est limité au tenant du JWT et réservé à `adm
 | `PUT` | `/api/rapports/planifies/{id}` | Modifier une planification |
 | `DELETE` | `/api/rapports/planifies/{id}` | Supprimer logiquement une planification |
 
+### Congés ERP et empêchements
+
+| Méthode | URL | Description |
+|---|---|---|
+| `GET` | `/api/absences` | Historique paginé, filtrable par dates, statut, source, matricule et numéro de demande |
+| `GET` | `/api/absences/forecast?date_debut=AAAA-MM-JJ&date_fin=AAAA-MM-JJ` | Prévision des congés ERP `APPROVED` sur une période future de 1 à 90 jours; périmètre filtré selon les employés visibles par le JWT |
+| `GET` | `/api/absences/erp-contract` | Contrat JSON normalisé attendu par le futur connecteur ERP; réservé aux RH et administrateurs; intégration directe désactivée |
+| `GET` | `/api/absences/import/template` | Téléchargement du modèle Excel de l’import manuel; dates formatées `YYYY-MM-DD`; réservé aux RH et administrateurs |
+| `GET` | `/api/absences/status-mappings` | Lire les mappings de statut propres au tenant, avec valeurs OBR par défaut |
+| `POST` | `/api/absences/status-mappings` | Ajouter/remplacer le mapping tenant; body `source_code`, `source_label`, `absence_status` (`PENDING`, `APPROVED`, `REJECTED` ou `CANCELLED`) |
+| `DELETE` | `/api/absences/status-mappings/{id}` | Supprimer une surcharge ou un mapping propre au tenant; une valeur OBR par défaut correspondante redevient applicable |
+| `GET`, `PUT` | `/api/absences/settings` | Lire/configurer le circuit (`RH_ONLY`, `SUPERVISOR_ONLY` ou `MANAGER_THEN_RH`); seuls les superviseurs du périmètre peuvent décider en mode `SUPERVISOR_ONLY` |
+| `POST` | `/api/absences/import/preview` | Analyser un fichier ERP sans écrire en base; multipart `fichier` |
+| `POST` | `/api/absences/import/commit` | Importer les lignes valides; multipart `fichier` et `ignorer_erreurs` |
+
+Le contrat API v1 affiche les champs attendus et les contraintes de données; l’ingestion interne `AbsenceErpSyncService` est désactivée par défaut et ne réalise aucun accès réseau. Le mapping de statut est propre au tenant et associe exactement un code et un libellé source à un statut AMS; les couples OBR historiques sont disponibles par défaut. L’import confirme uniquement le statut final selon le mapping. Les périodes complètes multi-jours et les demi-journées à date unique avec heures valides sont prises en charge. Une ligne absente d’un fichier n’annule aucune demande; une annulation n’est enregistrée que si un statut d’annulation explicite est importé. La prévision est en lecture seule et n’autorise pas AMS à valider un congé dans l’ERP.
+
 Exemples d’export et de lecture :
 
 ```powershell
