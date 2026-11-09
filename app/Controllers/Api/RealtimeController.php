@@ -41,6 +41,7 @@ final class RealtimeController extends BaseApiController
         $originesAutorisees = config('Cors')->default['allowedOrigins'] ?? [];
         if ($origine !== '' && in_array($origine, $originesAutorisees, true)) {
             header('Access-Control-Allow-Origin: ' . $origine);
+            header('Access-Control-Allow-Credentials: true');
             header('Vary: Origin');
         }
         while (ob_get_level() > 0) {
