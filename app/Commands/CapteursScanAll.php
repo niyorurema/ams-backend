@@ -35,13 +35,6 @@ class CapteursScanAll extends BaseCommand
             }
         }
 
-        $capteurs = (new CapteurModel())->where('statut', 'ACTIF')->findAll();
-        if ($capteurs === []) {
-            CLI::error('Aucun capteur actif enregistré.');
-
-            return EXIT_ERROR;
-        }
-
         CLI::write('');
         CLI::write(sprintf('Surveillance continue activée : polling toutes les %d secondes.', $interval), 'green');
 
@@ -49,6 +42,11 @@ class CapteursScanAll extends BaseCommand
         $runId = $jobs->start($this->name);
         while (true) {
             $cycleSummary = ['capteurs' => [], 'erreurs' => []];
+            $capteurs = (new CapteurModel())->where('statut', 'ACTIF')->findAll();
+            if ($capteurs === []) {
+                CLI::write('Aucun capteur actif pour le moment; nouvelle vérification au prochain cycle.', 'yellow');
+            }
+
             foreach ($capteurs as $capteur) {
                 try {
                     $result = (new ZKTecoService())->syncPointages(

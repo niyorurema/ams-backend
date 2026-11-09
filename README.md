@@ -144,7 +144,7 @@ Les commandes applicatives incluent notamment :
 
 ### Statut réel des capteurs
 
-Le statut de connexion est distinct de l’activation administrative. Les communications ADMS valides sont suivies selon `TransInterval=1` minute; les interrogations AMS reprennent l’intervalle configuré sur `capteurs:scan` ou `capteurs:scan-all --interval`. Un capteur actif est indiqué hors ligne après trois intervalles sans communication réussie, et inconnu avant son premier contact. La page des capteurs actualise cet état toutes les 15 secondes.
+Le statut de connexion est distinct de l’activation administrative. Les communications ADMS valides sont suivies selon `TransInterval=1` minute; les interrogations AMS reprennent l’intervalle configuré sur `capteurs:scan` ou `capteurs:scan-all --interval`. Le scanner `capteurs:scan-all` relit à chaque cycle la liste des capteurs administrativement actifs, ce qui prend en compte les capteurs ajoutés ou activés pendant son exécution. Un capteur actif est indiqué hors ligne après trois intervalles sans communication réussie, et inconnu avant son premier contact. La page des capteurs actualise cet état toutes les 15 secondes.
 
 ### Journal d’audit
 
