@@ -69,7 +69,9 @@ final class RejectedPointageService
             'type_evenement' => $typeEvenement,
             'date_capteur' => $dateCapteur,
             'motif' => 'DATE_FUTURE',
-            'recu_le' => date('Y-m-d H:i:s'),
+            'recu_le' => (new TenantTimezoneService($this->db))
+                ->now($tenantId)
+                ->format('Y-m-d H:i:s'),
         ]);
         if ($insere === false) {
             throw new RuntimeException('Impossible d’enregistrer le pointage rejeté : ' . $this->db->error()['message']);

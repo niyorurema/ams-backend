@@ -109,7 +109,7 @@ class EmployeHistoryService
         $total = (clone $requete)->countAllResults();
         $pointages = $requete->orderBy('p.date_pointage', 'DESC')->limit($limit, $offset)->get()->getResultArray();
         $requeteRejets = $this->db->table('pointages_rejetes p')
-            ->select('p.id, p.date_capteur, p.recu_le, p.motif, p.type_evenement, c.nom AS capteur')
+            ->select('p.id, p.date_capteur, p.recu_le, p.motif, p.source, p.type_evenement, c.nom AS capteur')
             ->join('capteurs c', 'c.id = p.capteur_id', 'left')
             ->where('p.tenant_id', (int) $employe['tenant_id'])
             ->where('p.employe_id', (int) $employe['id']);
