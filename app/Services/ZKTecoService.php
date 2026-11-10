@@ -745,7 +745,9 @@ class ZKTecoService
         $nombrePointagesCapteur = null;
 
         try {
-            $stats = ['lus' => 0, 'inseres' => 0, 'doublons' => 0, 'invalides' => 0, 'lots' => 0];
+            $stats = ['lus' => 0, 'inseres' => 0, 'doublons' => 0, 'invalides' => 0, 'dates_futures' => 0, 'lots' => 0];
+            $margeFutureSeconds = (int) (new ParametragePointageService($this->pointageModel->db))
+                ->get((int) $capteur['tenant_id'], 'marge_pointage_futur_minutes') * 60;
 
             foreach ($this->getAttendanceBatches(
                 $capteurId,
@@ -769,6 +771,7 @@ class ZKTecoService
                 $stats['lus'] += count($batch);
                 $stats['lots']++;
                 $records = [];
+                $rejectedRecords = [];
                 $badgeIds = [];
                 $matricules = [];
 
@@ -776,32 +779,44 @@ class ZKTecoService
                     $badgeId = (int) ($record['uid'] ?? 0);
                     $timestamp = $this->normalizeDatetime($record['timestamp'] ?? null);
 
-                    if ($badgeId <= 0 || $timestamp === null || $timestamp < '2001-01-01 00:00:00') {
+                    if ($badgeId <= 0 || $timestamp === null) {
                         $stats['invalides']++;
                         continue;
                     }
 
                     $record['uid'] = $badgeId;
                     $record['timestamp'] = $timestamp;
-                    $records[] = $record;
                     $badgeIds[] = $badgeId;
                     $matricule = trim((string) ($record['raw']['user_id'] ?? ''));
                     if ($matricule !== '') {
                         $matricules[] = $matricule;
                     }
+
+                    if (PointageTimestampValidator::isTooFarInFuture($timestamp, null, $margeFutureSeconds)) {
+                        $stats['invalides']++;
+                        $stats['dates_futures']++;
+                        $rejectedRecords[] = $record;
+                        continue;
+                    }
+                    if (! PointageTimestampValidator::isValid($timestamp, null, $margeFutureSeconds)) {
+                        $stats['invalides']++;
+                        continue;
+                    }
+
+                    $records[] = $record;
                     if ($checkpointCandidate === null || $timestamp > $checkpointCandidate) {
                         $checkpointCandidate = $timestamp;
                     }
                 }
 
-                if ($records === []) {
+                if ($records === [] && $rejectedRecords === []) {
                     continue;
                 }
 
                 $badgeIds = array_values(array_unique($badgeIds));
                 $matricules = array_values(array_unique($matricules));
                 $employeesQuery = $this->employeModel
-                    ->select('id, badge_id, matricule, user_id_capteur')
+                    ->select('id, tenant_id, badge_id, matricule, user_id_capteur')
                     ->where('tenant_id', (int) $capteur['tenant_id']);
                 $employeesQuery->groupStart();
                 if ($matricules !== []) {
@@ -832,6 +847,25 @@ class ZKTecoService
                     }
                 }
                 $employeeResolver = new PointageEmployeResolver();
+                $rejectedPointageService = new RejectedPointageService($this->pointageModel->db);
+                foreach ($rejectedRecords as $record) {
+                    $badgeId = (int) $record['uid'];
+                    $userIdCapteur = trim((string) ($record['raw']['user_id'] ?? ''));
+                    $rejectedPointageService->enregistrer(
+                        (int) $capteur['tenant_id'],
+                        $capteurId,
+                        $badgeId,
+                        $userIdCapteur,
+                        (string) $record['timestamp'],
+                        'ZKTECO',
+                        $this->mapAttendanceState((string) ($record['state'] ?? 'UNKNOWN')),
+                        $employees
+                    );
+                }
+
+                if ($records === []) {
+                    continue;
+                }
 
                 $timestamps = array_column($records, 'timestamp');
                 $existingRows = $this->pointageModel
@@ -978,11 +1012,12 @@ class ZKTecoService
             }
 
             $summary = sprintf(
-                'Pointages lus=%d, insérés=%d, doublons=%d, invalides=%d, lots=%d',
+                'Pointages lus=%d, insérés=%d, doublons=%d, invalides=%d, dates futures ignorées=%d, lots=%d',
                 $stats['lus'],
                 $stats['inseres'],
                 $stats['doublons'],
                 $stats['invalides'],
+                $stats['dates_futures'],
                 $stats['lots']
             );
 

@@ -59,6 +59,20 @@ final class RealtimeServiceTest extends CIUnitTestCase
         ]);
     }
 
+    public function testRejectsFarFutureAttendanceBeforePublishing(): void
+    {
+        $redis = $this->createMock(Client::class);
+        $redis->expects($this->never())->method('executeRaw');
+
+        $this->expectException(InvalidArgumentException::class);
+        (new RealtimeService($redis))->publierPointage([
+            'id' => 44,
+            'tenant_id' => 7,
+            'date_pointage' => '2103-08-18 06:43:39',
+            'type_evenement' => 'CHECK_IN',
+        ]);
+    }
+
     public function testReadsEventsAfterCursorForOnlyTheRequestedTenant(): void
     {
         $redis = $this->createMock(Client::class);

@@ -32,6 +32,10 @@ Le chiffre « 11 tables » ne correspond pas à l’état courant des migrations
 
 Les migrations sont la source de vérité pour toutes les colonnes, contraintes et valeurs d’ENUM. Consultez le fichier de migration correspondant avant toute modification de schéma.
 
+Les horodatages de capteur rejetés parce qu’ils sont trop avancés sont conservés dans `pointages_rejetes`, séparément de `pointages`; ils ne participent donc pas aux calculs de présence ni aux rapports. Après application de la migration correspondante, actualisez les déclencheurs d’audit avec `php spark audit:install-triggers`.
+
+La marge acceptée pour un horodatage futur est configurable par tenant dans **Paramètres → Pointages** (`marge_pointage_futur_minutes`). Elle vaut 5 minutes par défaut et peut être réglée de 0 à 60 minutes; le même seuil est appliqué aux flux capteurs et au temps réel.
+
 Les mots de passe ne doivent contenir que des hashes `password_hash`; `com_key`, les secrets SMTP/LDAP et `raw_data` doivent être protégés comme données sensibles selon les politiques d’exploitation.
 
 ## Import GPIO (OBR)

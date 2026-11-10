@@ -13,6 +13,7 @@ class ParametragePointageService
 {
     private const DEFAUTS_SYSTEME = [
         'ecart_max_association_minutes' => 360,
+        'marge_pointage_futur_minutes' => 5,
         'seuil_heures_sup_minutes' => 0,
         'mode_calcul_heures_sup' => 'ARRONDI',
         'pas_arrondi_heures_sup_minutes' => 15,
@@ -73,11 +74,15 @@ class ParametragePointageService
         }
         if (in_array($cle, [
             'ecart_max_association_minutes',
+            'marge_pointage_futur_minutes',
             'seuil_heures_sup_minutes',
             'duree_pause_minimum_minutes',
             'duree_pause_maximum_minutes',
         ], true) && ($type !== 'INT' || $valeurNormalisee < 0)) {
             throw new \InvalidArgumentException('Ce paramètre doit être un entier positif ou nul.');
+        }
+        if ($cle === 'marge_pointage_futur_minutes' && $valeurNormalisee > 60) {
+            throw new \InvalidArgumentException('La marge de date future doit être comprise entre 0 et 60 minutes.');
         }
         $existant = $this->chargerParametre($tenantId, $cle);
         $horodatage = date('Y-m-d H:i:s');
@@ -429,6 +434,7 @@ class ParametragePointageService
     {
         return match ($cle) {
             'ecart_max_association_minutes' => 'Écart maximal autorisé pour associer un pointage à un créneau.',
+            'marge_pointage_futur_minutes' => 'Marge autorisée pour les dates de pointage légèrement futures, en minutes.',
             'seuil_heures_sup_minutes' => 'Minutes au-delà de l’heure de fin avant de compter des heures supplémentaires.',
             'mode_calcul_heures_sup' => 'Mode de calcul des heures supplémentaires : ARRONDI ou EXACT.',
             'pas_arrondi_heures_sup_minutes' => 'Pas configurable, en minutes, pour l’arrondi des heures supplémentaires.',

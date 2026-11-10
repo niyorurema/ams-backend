@@ -7,6 +7,8 @@ use App\Models\EmployeModel;
 use App\Models\PointageModel;
 use App\Services\PointageEmployeResolver;
 use App\Services\PointageReclassificationService;
+use App\Services\PointageTimestampValidator;
+use App\Services\RejectedPointageService;
 use App\Services\RealtimeService;
 use App\Services\AuditContext;
 use App\Services\CapteurPresenceService;
@@ -190,12 +192,13 @@ class IclockController extends Controller
             switch ($table) {
                 case 'ATTLOG':
                     $result = $this->traiterPointages($capteur, $body);
-                    log_message('info', 'ADMS ATTLOG capteur={capteurId} reçus={received} insérés={inserted} doublons={duplicates} invalides={invalid}', [
+                    log_message('info', 'ADMS ATTLOG capteur={capteurId} reçus={received} insérés={inserted} doublons={duplicates} invalides={invalid} dates_futures_rejetées={rejectedFuture}', [
                         'capteurId' => $capteur['id'],
                         'received' => $result['received'],
                         'inserted' => $result['inserted'],
                         'duplicates' => $result['duplicates'],
                         'invalid' => $result['invalid'],
+                        'rejectedFuture' => $result['rejected_future'],
                     ]);
                     break;
 
@@ -230,7 +233,7 @@ class IclockController extends Controller
     /**
      * Enregistre les lignes tabulées ATTLOG et ignore les doublons exacts.
      *
-     * @return array{received:int,inserted:int,duplicates:int,invalid:int}
+     * @return array{received:int,inserted:int,duplicates:int,invalid:int,rejected_future:int}
      */
     private function traiterPointages(array $capteur, string $body): array
     {
@@ -264,7 +267,7 @@ class IclockController extends Controller
         $badgeIds = array_values(array_unique(array_column($parsedRecords, 'badge_id')));
         $matricules = array_values(array_unique(array_column($parsedRecords, 'user_id')));
         $employeeQuery = (new EmployeModel())
-            ->select('id, badge_id, matricule, user_id_capteur')
+            ->select('id, tenant_id, badge_id, matricule, user_id_capteur')
             ->where('tenant_id', (int) $capteur['tenant_id']);
         $employeeQuery->groupStart();
         if ($matricules !== []) {
@@ -301,9 +304,37 @@ class IclockController extends Controller
         $pointageModel->db->transBegin();
         $inserted = 0;
         $duplicates = 0;
+        $rejectedFuture = 0;
         $insertedPointageIds = [];
+        $rejectedPointageService = new RejectedPointageService($pointageModel->db);
+        $margeFutureSeconds = (int) (new \App\Services\ParametragePointageService($pointageModel->db))
+            ->get((int) $capteur['tenant_id'], 'marge_pointage_futur_minutes') * 60;
 
         foreach ($parsedRecords as $record) {
+            if (PointageTimestampValidator::isTooFarInFuture($record['timestamp'], null, $margeFutureSeconds)) {
+                try {
+                    $rejectedPointageService->enregistrer(
+                        (int) $capteur['tenant_id'],
+                        (int) $capteur['id'],
+                        (int) $record['badge_id'],
+                        (string) $record['user_id'],
+                        (string) $record['timestamp'],
+                        'ADMS',
+                        $this->mapperTypeEvenement($record['state']),
+                        $employees
+                    );
+                } catch (Throwable $exception) {
+                    $pointageModel->db->transRollback();
+                    throw $exception;
+                }
+                $rejectedFuture++;
+                continue;
+            }
+            if (! PointageTimestampValidator::isValid($record['timestamp'], null, $margeFutureSeconds)) {
+                $invalid++;
+                continue;
+            }
+
             $exists = $pointageModel
                 ->where('tenant_id', (int) $capteur['tenant_id'])
                 ->where('capteur_id', (int) $capteur['id'])
@@ -363,7 +394,14 @@ class IclockController extends Controller
 
         $jours = array_values(array_unique(array_map(
             static fn (array $record): string => substr($record['timestamp'], 0, 10),
-            $parsedRecords
+            array_filter(
+                $parsedRecords,
+                static fn (array $record): bool => PointageTimestampValidator::isValid(
+                    $record['timestamp'],
+                    null,
+                    $margeFutureSeconds
+                )
+            )
         )));
         $reclassification = new PointageReclassificationService($pointageModel->db);
         foreach ($jours as $jour) {
@@ -403,6 +441,7 @@ class IclockController extends Controller
             'inserted' => $inserted,
             'duplicates' => $duplicates,
             'invalid' => $invalid,
+            'rejected_future' => $rejectedFuture,
         ];
     }
 
@@ -463,15 +502,19 @@ class IclockController extends Controller
         $date = DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $value);
         $errors = DateTimeImmutable::getLastErrors();
 
-        if ($date === false || ($errors !== false && ($errors['warning_count'] > 0 || $errors['error_count'] > 0))) {
+        if ($date === false
+            || $date->format('Y-m-d H:i:s') !== $value
+            || $errors !== false && ($errors['warning_count'] > 0 || $errors['error_count'] > 0)
+        ) {
             return null;
         }
 
+        $normalisee = $date->format('Y-m-d H:i:s');
         if ((int) $date->format('Y') < 2001) {
             return null;
         }
 
-        return $date->format('Y-m-d H:i:s');
+        return $normalisee;
     }
 
     /**

@@ -22,7 +22,7 @@ class EmployeHistoryService
     /**
      * Retourne les pointages personnels enrichis et les statuts quotidiens.
      *
-     * @param array{date_debut?:string,date_fin?:string,date_jour?:string,periode_debut?:string,periode_fin?:string,matricule?:string,limit?:int,offset?:int} $filtres
+     * @param array{date_debut?:string,date_fin?:string,date_jour?:string,periode_debut?:string,periode_fin?:string,matricule?:string,limit?:int,offset?:int,rejets_offset?:int} $filtres
      * @return array<string, mixed>
      */
     public function getMonHistorique(int $userId, array $filtres = []): array
@@ -95,6 +95,8 @@ class EmployeHistoryService
 
         $limit = min(500, max(1, (int) ($filtres['limit'] ?? 50)));
         $offset = max(0, (int) ($filtres['offset'] ?? 0));
+        $rejetsLimit = 20;
+        $rejetsOffset = max(0, (int) ($filtres['rejets_offset'] ?? 0));
         $requete = $this->db->table('pointages p')
             ->select("p.id, p.date_pointage, p.type_evenement, COALESCE(p.statut_calcul, 'UNKNOWN') AS statut_calcul, COALESCE(p.source, 'UNKNOWN') AS source, c.nom AS capteur")
             ->join('capteurs c', 'c.id = p.capteur_id', 'left')
@@ -106,6 +108,17 @@ class EmployeHistoryService
 
         $total = (clone $requete)->countAllResults();
         $pointages = $requete->orderBy('p.date_pointage', 'DESC')->limit($limit, $offset)->get()->getResultArray();
+        $requeteRejets = $this->db->table('pointages_rejetes p')
+            ->select('p.id, p.date_capteur, p.recu_le, p.motif, p.type_evenement, c.nom AS capteur')
+            ->join('capteurs c', 'c.id = p.capteur_id', 'left')
+            ->where('p.tenant_id', (int) $employe['tenant_id'])
+            ->where('p.employe_id', (int) $employe['id']);
+        $totalRejets = (clone $requeteRejets)->countAllResults();
+        $pointagesRejetes = $requeteRejets
+            ->orderBy('p.recu_le', 'DESC')
+            ->limit($rejetsLimit, $rejetsOffset)
+            ->get()
+            ->getResultArray();
         $pointagesDuJour = $this->db->table('pointages p')
             ->select("p.id, p.date_pointage, p.type_evenement, COALESCE(p.statut_calcul, 'UNKNOWN') AS statut_calcul, COALESCE(p.source, 'UNKNOWN') AS source, c.nom AS capteur")
             ->join('capteurs c', 'c.id = p.capteur_id', 'left')
@@ -151,6 +164,12 @@ class EmployeHistoryService
             'presence_du_jour' => $presenceDuJour,
             'pointages_du_jour' => $pointagesDuJour,
             'pointages' => $pointages,
+            'pointages_rejetes' => $pointagesRejetes,
+            'pointages_rejetes_pagination' => [
+                'limit' => $rejetsLimit,
+                'offset' => $rejetsOffset,
+                'total' => $totalRejets,
+            ],
             'statuts_journaliers' => $statuts,
             'pagination' => ['limit' => $limit, 'offset' => $offset, 'total' => $total],
         ];

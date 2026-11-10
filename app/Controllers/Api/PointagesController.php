@@ -1160,6 +1160,7 @@ class PointagesController extends BaseApiController
             'matricule' => trim((string) ($this->request->getGet('matricule') ?? '')),
             'limit' => (int) ($this->request->getGet('limit') ?? 50),
             'offset' => (int) ($this->request->getGet('offset') ?? 0),
+            'rejets_offset' => (int) ($this->request->getGet('rejets_offset') ?? 0),
         ];
         foreach (['date_debut', 'date_fin', 'date_jour', 'periode_debut', 'periode_fin'] as $cle) {
             if ($filtres[$cle] !== '' && ! $this->dateValide($filtres[$cle])) {

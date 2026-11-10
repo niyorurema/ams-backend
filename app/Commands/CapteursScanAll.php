@@ -62,12 +62,13 @@ class CapteursScanAll extends BaseCommand
                         $cycleSummary['erreurs'][$capteur['id']] = 'Le capteur a retourné le statut ' . $sensorStatus . '.';
                     }
                     CLI::write(sprintf(
-                        'Capteur #%d : %s | lus=%d | insérés=%d | doublons=%d',
+                        'Capteur #%d : %s | lus=%d | insérés=%d | doublons=%d | dates futures ignorées=%d',
                         $capteur['id'],
                         $result['status'] ?? 'UNKNOWN',
                         $result['stats']['lus'] ?? 0,
                         $result['stats']['inseres'] ?? 0,
-                        $result['stats']['doublons'] ?? 0
+                        $result['stats']['doublons'] ?? 0,
+                        $result['stats']['dates_futures'] ?? 0
                     ));
                 } catch (Throwable $e) {
                     $cycleSummary['erreurs'][$capteur['id']] = $e->getMessage();

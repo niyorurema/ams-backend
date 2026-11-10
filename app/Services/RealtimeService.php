@@ -40,12 +40,16 @@ final class RealtimeService
             throw new \InvalidArgumentException('Tenant ou pointage invalide pour la publication temps réel.');
         }
 
+        $margeFutureSeconds = (int) (new ParametragePointageService())->get(
+            $tenantId,
+            'marge_pointage_futur_minutes'
+        ) * 60;
         $datePointage = (string) ($pointage['date_pointage'] ?? '');
-        if (! $this->datePointageValide($datePointage)) {
+        if (! PointageTimestampValidator::isValid($datePointage, null, $margeFutureSeconds)) {
             $rawData = $this->decoderRawData($pointage['raw_data'] ?? null, (int) $pointage['id']);
             $dateRaw = is_array($rawData) ? (string) ($rawData['timestamp'] ?? '') : '';
-            if (! $this->datePointageValide($dateRaw)) {
-                throw new \InvalidArgumentException('Date sentinelle ou invalide pour la publication temps réel.');
+            if (! PointageTimestampValidator::isValid($dateRaw, null, $margeFutureSeconds)) {
+                throw new \InvalidArgumentException('Date sentinelle, invalide ou trop éloignée dans le futur pour la publication temps réel.');
             }
             $datePointage = $dateRaw;
         }
@@ -153,7 +157,11 @@ final class RealtimeService
         $matriculePresent = array_key_exists('employe_matricule', $donnees);
         $badgePresent = array_key_exists('badge_id', $donnees);
         $dateCourante = (string) ($donnees['date_pointage'] ?? '');
-        $dateCouranteValide = $this->datePointageValide($dateCourante);
+        $margeFutureSeconds = (int) (new ParametragePointageService())->get(
+            $tenantId,
+            'marge_pointage_futur_minutes'
+        ) * 60;
+        $dateCouranteValide = PointageTimestampValidator::isValid($dateCourante, null, $margeFutureSeconds);
         if ($nomCourant !== '' && $matriculePresent && $badgePresent && $dateCouranteValide) {
             return $evenement;
         }
@@ -180,7 +188,7 @@ final class RealtimeService
         $rawData = $this->decoderRawData($pointage['raw_data'] ?? null, $pointageId);
         $rawTimestamp = is_array($rawData) ? (string) ($rawData['timestamp'] ?? '') : '';
         $datePointage = (string) $pointage['date_pointage'];
-        if ($this->datePointageValide($rawTimestamp)) {
+        if (PointageTimestampValidator::isValid($rawTimestamp, null, $margeFutureSeconds)) {
             $datePointage = $rawTimestamp;
         }
         $matriculeBrut = is_array($rawData)
@@ -202,17 +210,6 @@ final class RealtimeService
         ];
 
         return $evenement;
-    }
-
-    private function datePointageValide(string $value): bool
-    {
-        $date = \DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $value);
-        $errors = \DateTimeImmutable::getLastErrors();
-
-        return $date !== false
-            && $date->format('Y-m-d H:i:s') === $value
-            && (int) $date->format('Y') >= 2001
-            && ($errors === false || ($errors['warning_count'] === 0 && $errors['error_count'] === 0));
     }
 
     private function decoderRawData(mixed $value, int $pointageId): ?array

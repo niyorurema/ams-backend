@@ -292,7 +292,7 @@ class TenantConfigController extends BaseApiController
                     $tenantId,
                     null,
                     true,
-                    $valeursParametres,
+                    array_diff_key($valeursParametres, ['marge_pointage_futur_minutes' => true]),
                     $creneauxFinaux
                 );
                 if (! $this->creneauxPauseComplets($configurationFinale['creneaux'])
